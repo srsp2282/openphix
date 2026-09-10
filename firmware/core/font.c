@@ -59,24 +59,52 @@ const struct font *font_get(enum font_id id)
     return &fonts[id < FONT_COUNT ? id : FONT_16X16];
 }
 
+/* Advance of a glyph: the 8x16 fonts are monospaced, the others hold
+ * narrow designs left-aligned in a wide cell, so the advance follows the
+ * rightmost ink column plus a gap. */
+static int glyph_advance(const struct font *f, const uint8_t *g)
+{
+    int right = -1;
+    if (f->width == 8)
+        return f->pitch;
+    for (int row = 0; row < f->height; row++) {
+        const uint8_t *bits = g + row * f->row_bytes;
+        for (int col = f->width - 1; col > right; col--)
+            if ((bits[col >> 3] >> (7 - (col & 7))) & 1) {
+                right = col;
+                break;
+            }
+    }
+    if (right < 0)
+        return f->pitch / 2;              /* space */
+    return right + 1 + (f->width >= 20 ? 3 : 2);
+}
+
+static int load_glyph(const struct font *f, unsigned code, uint8_t *g)
+{
+    if (!f->glyph_bytes || code >= f->count || f->glyph_bytes > 96)
+        return -1;
+    return res_read(&f->data, (uint32_t)code * f->glyph_bytes, g, f->glyph_bytes);
+}
+
 int font_glyph(const struct font *f, unsigned code, int x, int y, uint16_t fg, uint32_t bg)
 {
     uint8_t g[96];
-    if (!f->glyph_bytes || code >= f->count || f->glyph_bytes > sizeof g)
+    int adv;
+    if (load_glyph(f, code, g) != 0)
         return x + f->pitch;
-    if (res_read(&f->data, (uint32_t)code * f->glyph_bytes, g, f->glyph_bytes) != 0)
-        return x + f->pitch;
+    adv = glyph_advance(f, g);
     for (int row = 0; row < f->height; row++) {
         const uint8_t *bits = g + row * f->row_bytes;
         for (int col = 0; col < f->width; col++) {
             int ink = (bits[col >> 3] >> (7 - (col & 7))) & 1;
             if (ink)
                 gfx_pixel(x + col, y + row, fg);
-            else if (bg != FONT_TRANSPARENT && col < f->pitch)
+            else if (bg != FONT_TRANSPARENT && col < adv)
                 gfx_pixel(x + col, y + row, (uint16_t)bg);
         }
     }
-    return x + f->pitch;
+    return x + adv;
 }
 
 int font_text(const struct font *f, const char *s, int x, int y, uint16_t fg, uint32_t bg)
@@ -88,8 +116,11 @@ int font_text(const struct font *f, const char *s, int x, int y, uint16_t fg, ui
 
 int font_text_width(const struct font *f, const char *s, int n)
 {
-    int len = n > 0 ? n : (int)strlen(s);
-    return len * f->pitch;
+    int len = n > 0 ? n : (int)strlen(s), w = 0;
+    uint8_t g[96];
+    for (int i = 0; i < len; i++)
+        w += load_glyph(f, (uint8_t)s[i], g) == 0 ? glyph_advance(f, g) : f->pitch;
+    return w;
 }
 
 void font_text_centred(const struct font *f, const char *s, int x, int w, int y, uint16_t fg, uint32_t bg)
@@ -100,13 +131,13 @@ void font_text_centred(const struct font *f, const char *s, int x, int w, int y,
 
 int font_text_clipped(const struct font *f, const char *s, int x, int y, int w, uint16_t fg, uint32_t bg)
 {
-    int n = (int)strlen(s);
-    int fit = w / f->pitch;
-    if (n <= fit)
+    int n = (int)strlen(s), fit = n;
+    if (font_text_width(f, s, 0) <= w)
         return font_text(f, s, x, y, fg, bg);
-    if (fit < 3)
-        return x;
-    for (int i = 0; i < fit - 2; i++)
+    /* drop characters until the text plus ".." fits */
+    while (fit > 0 && font_text_width(f, s, fit) + font_text_width(f, "..", 2) > w)
+        fit--;
+    for (int i = 0; i < fit; i++)
         x = font_glyph(f, (uint8_t)s[i], x, y, fg, bg);
     x = font_glyph(f, '.', x, y, fg, bg);
     return font_glyph(f, '.', x, y, fg, bg);

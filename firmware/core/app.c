@@ -6,8 +6,11 @@
 #include "openphix/cmd.h"
 #include "openphix/dtc.h"
 #include "openphix/sysscan.h"
+#include "openphix/ui.h"
 #include "openphix/exp.h"
 #include "openphix/font.h"
+#include "openphix/menu.h"
+#include "openphix/funcfg.h"
 #include "openphix/str.h"
 #include "openphix/gfx.h"
 #include "openphix/hal.h"
@@ -200,20 +203,35 @@ int app_tool(int argc, char **argv)
     return 2;
 }
 
-int app_main(void)
+static void boot(void)
 {
     struct res img;
+    str_init(&g_image);
+    exp_init(&g_image);
+    cmd_init(&g_image);
+    dtc_init(&g_image);
+    sysscan_init(&g_image);
+    menu_init(&g_image);
+    funcfg_init(&g_image);
+    font_load(&g_image, "WESTISO");
+    if (res_open(&g_image, ui_skin->start, &img) == 0) {
+        gfx_blit_screen(&img);
+        gfx_flush();
+        hal_delay_ms(1500);
+    }
+}
+
+int app_main(void)
+{
     if (res_init(&g_image) != 0) {
         gfx_clear(GFX_BLACK);
+        font_text(font_get(FONT_16X16), "No data image in flash", 8, 8, GFX_WHITE, FONT_TRANSPARENT);
         gfx_flush();
         hal_log("no data image in flash");
         hal_key_wait(HAL_WAIT_FOREVER);
         return 1;
     }
-    if (res_open(&g_image, "BGSTART_GRAY.BIN", &img) == 0)
-        gfx_blit_screen(&img);
-    gfx_flush();
-    while (hal_key_wait(HAL_WAIT_FOREVER) != HAL_KEY_QUIT)
-        ;
+    boot();
+    ui_main_menu();
     return 0;
 }

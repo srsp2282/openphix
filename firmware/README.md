@@ -13,15 +13,32 @@ consumes the vendor's data image, not a port of the vendor's code.
 include/openphix/   public headers of the portable core
 core/               the portable core (no hardware access, only the HAL)
   res.c             external flash access, image cipher, hix container
+  table.c           the indexed table layout shared by several files
+  str.c             string tables, current language with English fall back
+  font.c            bitmap fonts and proportional text drawing
   gfx.c             320x240 RGB565 framebuffer and primitives
-  app.c             application entry, developer tools
+  exp.c             interpreter for the Exp.BIN expression language
+  cmd.c             Cmd.BIN command records (CAN frames, K-line chunks)
+  dtc.c             fault code and measuring block text lookup
+  sysscan.c         the control module database (SYSSCAN.BIN)
+  menu.c            the For VW menu tree (Menu.BIN)
+  funcfg.c          per module function configuration (FUNCFG.BIN)
+  ui.c              list widget and the screens
+  app.c             boot, main loop, developer tools
 ports/sim/          PC simulator (Linux, optional X11 window)
 tests/              unit tests, run against the flash dump in dumps/
 ```
 
-Further modules land as their file formats are decoded: fonts and text,
-string tables, menu tree, module database, command scripts and the
-expression interpreter, the protocol stacks and the UI.
+What runs today: boot from the encrypted flash image, the eight icon main
+menu, the For VW tree with System Selection down to the per module
+function menu (built from the module's FUNCFG record), the special
+function lists, OBDII and Tool Setup menus, language switching, both
+skins, battery voltage. Every function that needs the vehicle bus ends in
+the stock "Device unable to communicate" screen, because the protocol
+stacks (ISO 15765 / UDS, TP2.0, KWP2000, KWP1281) and the hardware port do
+not exist yet. The data behind them (connect sequences, command bytes,
+response expressions, text ids) is already reachable through the core
+modules; see `docs/data-image-format.md`.
 
 ## Build and run the simulator
 
@@ -45,7 +62,9 @@ Headless runs for tests and scripts:
 ```
 
 `--tool` runs one of the developer tools built into the core, which print
-decoded resources so they can be compared with `tools/hixtool`.
+decoded resources so they can be compared with `tools/hixtool`: `ls`,
+`str <id>...`, `text [string]`, `exp <id> [bytes]`, `cmd <id>`,
+`modules`, `dtc <code>...`.
 
 ## Hardware ports
 
