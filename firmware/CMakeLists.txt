@@ -13,6 +13,8 @@ add_compile_options(-Wall -Wextra -Wshadow)
 file(GLOB CORE_SOURCES ${CMAKE_CURRENT_SOURCE_DIR}/core/*.c)
 add_library(openphix_core STATIC ${CORE_SOURCES})
 target_include_directories(openphix_core PUBLIC include)
+target_link_libraries(openphix_core PUBLIC m)
+target_compile_definitions(openphix_core PUBLIC _POSIX_C_SOURCE=200809L)
 
 # PC simulator
 option(OPENPHIX_SIM_X11 "Open an X11 window in the simulator" ON)

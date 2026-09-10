@@ -283,3 +283,163 @@ Byte order was proven by rendering: little-endian gives the logos and icon
 grids, big-endian gives noise. `hixtool images` exports all of them. One
 quirk: the dump's IMAGE01.bin/ToolRetractPump_P1.BIN is 153601 bytes, one
 stray byte after the image.
+
+## 7. Expressions (`Exp.BIN`)
+
+### 7.1 Layout
+
+```
+u32   count                          3535 in the dump, 3543 in V1.61
+count x { u32 id, u32 offset }       sorted by id
+records: u16 len (including the NUL), text, NUL
+```
+
+Records follow each other in index order; one unreferenced record sits
+after id 0x02080053 in both images (a deleted entry whose bytes were kept).
+Ids are `group:index` (u16:u16) and are referenced as u32 from FUNCFG.BIN,
+ComboSpFunc.BIN, SYSSCAN.BIN, DsTransID.BIN and Menu.BIN.
+
+| Group | Count | Content |
+|---|---|---|
+| 0x0000 | 155 | generic helpers: response checks, VIN and part number formatting |
+| 0x0100 | 890 | measuring value conversions (`Y=0.39215687*x;`) |
+| 0x0101 | 72 | byte to string id enumerations (`else if` chains) |
+| 0x0110 | 69 | multi byte conversions with "not available" checks |
+| 0x02MM | 1 to 147 per module | ECU identification by part number, MM = VAG address |
+| 0x0400 | 579 | fault code translation hooks (`TRANSID`) |
+| 0xEE00 | 232 | special functions, battery test limits (`RANGE`) |
+
+### 7.2 The language
+
+Every record is one or more statements that assign the result `Y`:
+
+```
+Y=1;
+if(X1==0x54) Y=1; else Y=0;
+if(x1==0xFF&&x2==0xFF) Y=string(0x02,0x01,0x00,0x0A);else Y=1.0/32768*(x1*256+x2);
+if(0 == strcmp([EV_Brake1ABS90BOSCH003],ASCII(X5,X6,...,X33))&&(X1==22)) Y=1; else Y=0;
+Y=TRANSID(ID(0x00000038),ID(0x00000039),ID(0x04001001));
+Y=RANGE(2000,boundless);
+```
+
+- Variables: `X1`..`X41` (case mixed freely, `x1` is the same), the
+  response payload bytes; bare `x`, the single input byte; `x.bitN` and
+  `xK.bitN`, bit access; `Y` or `y`, the result.
+- Literals: hex `0x..`, decimal integers, decimal floats (`0.39215687`),
+  no negative literals. Two records write `FF` without the `0x`.
+- Operators: `== != < > <= >= && || & | >> + - * / %`, parentheses. Not
+  used anywhere: `<<`, `^`, `~`, `!`, `?:`, braces, double quotes.
+- Statements: `Y=expr;`, `if(cond) stmt; else stmt;`, `else if` chains
+  (the longest record is 2204 characters). A few records follow a chain
+  with an unconditional assignment, which then always wins.
+- String literals are written in square brackets: `[EV_ClimaTronicT5A01]`,
+  `[%02X %02X]`.
+- Functions: `string(a,b,c,d)` yields the string id `a<<24|b<<16|c<<8|d`
+  (3026 of 3109 uses resolve in the English table; literal constants such
+  as `Y=0x01040002;` are string ids too); `strcmp([lit], ASCII(...))`, always
+  compared with 0; `ASCII(bytes...)` builds text from bytes; `SPRINTF([fmt],
+  args...)` and `CHARCONVERT` with `%c`, `%X`, `%02X`; `HEX(bytes...)`;
+  `INT(expr)`; `ID(n)` evaluates another record; `TRANSID(ID(a),ID(b),ID(c))`
+  translates a fault code (a = the raw code, b and c string id bases);
+  `RANGE(lo, hi)` or `RANGE(lo, boundless)` gives limits for a value.
+- Seven records have unbalanced parentheses (0x01000001, 0x01000305,
+  0x01000307, 0x01000308, 0x01000363, 0x01000364, 0x01000365). An
+  interpreter has to tolerate that or those conversions fail.
+
+The open firmware implements this language in `firmware/core/exp.c`; the
+test suite parses and evaluates every record of the dump.
+
+## 8. Diagnostic commands (`Cmd.BIN`)
+
+### 8.1 Layout
+
+```
+u32   count                          6399 in the dump, 6408 in V1.61
+count x { u32 id, u32 offset }
+records:
+      u8  len          bytes that follow; wrong in 171 records, use the index
+      u8  kind
+      u8  h1..h5       header, meaning depends on kind
+      payload
+```
+
+| Kind | Count | Meaning | Header and payload |
+|---|---|---|---|
+| 0x10 | 5751 | send | h1 link, h2 = 1 when packets carry a CAN id, h3 packet count, h4 = 0xFF when the payload is completed at run time, h5 = 2 when the second packet is an ISO-TP flow control; packets follow |
+| 0x01 | 363 | keepalive | h1 payload format (1 raw K-line, 2 CAN packets, 3 ISO 9141, 4 KWP1281 block, 5 K-line chunks, 0x11 KWP1281 chunk), h2 flags, h4h5 = period in ms (800 for tester present) |
+| 0x02, 0x25 | 87 | raw ISO 14230 message | `fmt target source [len] data... checksum`, target, source and checksum are 0x00 placeholders |
+| 0x40 | 39 | raw KWP1281 block | `len 00 title data... 03`, the 0x00 is the block counter placeholder |
+| 0x30 | 86 | 5 baud init | h3 = ECU address, h4h5 = 5; group 0x5500 has one per VAG address |
+| 0x60 | 15 | number | h2..h5 u32 big-endian, microsecond delays and timeouts (8000000, 500000, 95000) |
+| 0x08 | 58 | raw bytes | ISO 9141-2 headers `68 6a f1`, ISO 14230 address modes, and an unidentified K-line protocol |
+
+### 8.2 Packets of kind 0x10
+
+```
+u8   blen        bytes that follow in this packet
+u8   dlc         low nibble = CAN data length; bit 7 set in the 0x32xx groups
+u16  can_id      big-endian, only when blen == dlc + 3; STM32 bxCAN format, StdId = value >> 5
+u8   data[dlc]
+```
+
+The link byte h1 says how to read the data:
+
+| h1 | Count | Content |
+|---|---|---|
+| 0x00, 0x50, 0x52 | 3621 | raw CAN frames with the ISO-TP PCI inside (padding 0x00, 0x55 or 0xFF). The same UDS command set exists three times (groups 0x3000 / 0x3100 / 0x3200 and 0x3022 / 0x3222) under the three values, so they select a physical CAN setting that the file does not name |
+| 0x05 | 108 | TP2.0 data packet: opcode (1N last packet, 2N more follow), u16 big-endian length, KWP2000 data |
+| 0x06 | 2795 | K-line KWP2000: the complete message (format, target, source, service, data, checksum) split into chunks of at most 7 bytes, each prefixed with a TP2.0 style opcode (0x30 single or last, 0x20 first, 0x21 second, 0x31/0x32 last with sequence). Reassembled, 2123 of 2144 messages have a correct checksum; the 21 failures are generator bugs (a stale 0xD8 byte in the tester present records of most modules, module 0xE9 with checksums copied from another module) |
+| 0x07 | 15 | KWP1281 block with a 0x00 counter placeholder, same chunk prefixes |
+| 0x01, 0x02 | 226 | TP2.0 channel setup (`07 01 c0 00 10 00 03 01` to 0x200) and parameter frames (`a0 0f 8a ff 32 ff`) |
+
+CAN ids seen: 0x7DF and 0x7E0 (OBD), 0x700 (functional tester present),
+0x200 (TP2.0 broadcast), per module TP2.0 channel ids, 0x440/0x441 (a non
+VAG UDS set in group 0x7000). The bxCAN encoding was checked: 0xFBE0 >> 5 =
+0x7DF, 0xFC00 >> 5 = 0x7E0, 0x4000 >> 5 = 0x200.
+
+Worked examples:
+
+```
+00000001  10 | 00 00 01 00 00 | 09 08 02 10 03 00 00 00 00 00
+          one CAN frame, 02 10 03 = UDS DiagnosticSessionControl extended, pad 00
+00000004  10 | 50 00 02 00 02 | 09 08 03 22 f1 90 55 55 55 55 | 09 08 30 00 00 55 55 55 55 55
+          ReadDataByIdentifier F190 (VIN), then the flow control frame, pad 55
+30220102  10 | 50 00 01 00 00 | 09 08 03 22 01 02 55 55 55 55
+          group 0x3022 = "UDS 22 <DID>", the DID is the low 16 bits of the id
+02010005  10 | 06 00 01 00 00 | 08 07 30 82 10 f1 10 89 1c
+          K-line StartDiagnosticSession 0x89 to target 0x10 from 0xF1, checksum 0x1C
+02011026  10 | 06 00 03 00 00 | 09 08 20 8c 10 f1 31 bb 01 03 | 09 08 21 00 .. | 04 03 32 00 7d
+          three chunks = 8c 10 f1 31 bb 01 03 00 00 00 00 00 00 00 00 7d (StartRoutine 0xBB)
+06000005  10 | 07 00 01 01 00 | 07 06 30 04 00 29 51 03
+          KWP1281 block: len 4, counter placeholder, title 0x29 group reading, group 0x51
+00000003  01 | 02 c0 00 03 20 | 0b 08 e0 00 02 3e 80 55 55 55 55 55
+          every 800 ms: 02 3e 80 TesterPresent to CAN id 0x700
+```
+
+### 8.3 Per module command sets
+
+Group 0x02MM (MM = VAG diagnostic address, 53 modules) holds the same 44
+commands per module: TP2.0 connect and parameters, StartDiagnosticSession
+`10 89`, ReadEcuIdentification `1a 9b/90/91/86`, ReadDataByLocalId `22
+f187/f190/f197/f1a5/f1df/f191`, ReadDTC `18 00 ff 00` and `18 02 ff 00`,
+ClearDTC `14 ff 00`, `21 01`, routines `31 b8/b9/ba`, SecurityAccess `27
+03/04`, tester present. The KWP2000 physical target per VAG address, read
+from those records (VAG:target):
+
+```
+01:10 02:1a 07:63 08:98 0d:b0 13:29 15:58 16:30 19:40 1c:69 23:2a 25:c0 26:a0
+32:18 34:38 37:62 38:af 46:a2 48:a8 57:82 64:20 67:83 68:a6 6d:b2 6e:68
+76:60 83:28 85:c4 86:a5 89:a4 91:11 92:1b 97:61 98:99 a2:1c a7:64 a8:9a
+ad:92 b5:c1 b6:a1 bc:6b c4:31 c7:81 d5:70 d6:80 dc:6c e5:3a e6:a3 e9:41
+ec:6a f1:43 f7:91 f8:a7
+```
+
+Generic sets: 0x0100 (94, CAN), 0x0400 (KWP1281 blocks), 0x0500 (K-line
+raw), 0x0600 (KWP1281 chunked), 0x5500 (slow init per module), 0x5600
+(TP2.0 connect per module), 0x7000 and 0x8000 (a non VAG UDS set), 0xE0xx,
+0xE122, 0xE200, 0xE320 (special functions: `2e` writes, `31 01 03 a0/a1`
+routines, security access), 0xFF00 (delays).
+
+Open: what the three CAN link values and the dlc bit 7 select physically,
+the keepalive flag bits, and the protocols behind kind 0x08. These need a
+bus capture or the MCU firmware.
