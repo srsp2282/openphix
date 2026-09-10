@@ -260,7 +260,7 @@ docs/
 tools/
   openphix-tool/        cross-platform CLI updater (C99, libusb-1.0)
   keysearch/            finds the MCU image key in a microcontroller flash dump
-dumps/                  flash dumps from real units, git-ignored
+dumps/                  flash dumps taken from real units
 ```
 
 The vendor's `Update.exe` binaries are not kept here. They were decompiled to
@@ -310,8 +310,9 @@ openphix-tool decrypt extflash.bin plain.bin   # remove the XOR keystream
 ```
 
 This was done on a DM100 in September 2026; the results are
-described in `docs/update-protocol.md`. Dumps go under `dumps/`, which is
-git-ignored because the content is the vendor's. The MCU's internal flash
+described in `docs/update-protocol.md`. Dumps go under `dumps/`, one
+directory per unit, holding the raw flash, the decrypted data image and the
+recorded bus log. The MCU's internal flash
 (the actual firmware code) cannot be read over USB; that needs SWD access
 to the microcontroller.
 
@@ -344,8 +345,13 @@ respective vendors and are kept here for reference and interoperability
 research only. The open firmware will be written from scratch against public
 standards (ISO 15765, ISO 14230, ISO 9141, SAE J1979 and the published VAG
 transport protocols) and against observed device behaviour. No vendor code
-is copied. Do not contribute decrypted or disassembled vendor firmware to
-this repository.
+is copied.
+
+`dumps/` holds flash images read from devices the contributors own, together
+with the decrypted data image derived from them. They are here because the
+project needs a reference for the container format and for comparing
+firmware versions. They are the vendor's content, so treat them the same way
+as everything in `vendor-files/`.
 
 Diagnostic tools can change vehicle settings. Anything you flash or run on a
 car is at your own risk.

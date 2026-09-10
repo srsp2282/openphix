@@ -1,0 +1,5 @@
+USB id:             0483:5265 (DM100)
+update path:        DM100 (vendor tool logic)
+bootloader version: 1.56
+external flash:     33554432 bytes (32 MiB)
+feedback area:      contains data
