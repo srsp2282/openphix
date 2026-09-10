@@ -19,8 +19,15 @@ Research phase, but no longer paper-only. What works today:
 - The data image cipher is broken. `openphix-tool decrypt` turns any
   `ExtFlashDat.bin` or flash dump into the real data image.
 
-What does not exist yet: any replacement firmware, and the key to the MCU
-image, which needs a hardware dump of the microcontroller. See
+- The data image container and most of the file formats inside it are
+  decoded (`docs/data-image-format.md`), and `tools/hixtool` extracts and
+  decodes them: string tables, fonts, screens, the menu tree, the module
+  database and the diagnostic command scripts.
+- `firmware/` holds the start of the open firmware: a portable core that
+  reads the (decrypted) data image and runs on a PC simulator.
+
+What does not exist yet: firmware that runs on the device, and the key to
+the MCU image, which needs a hardware dump of the microcontroller. See
 [Roadmap](#roadmap) and [How to help](#how-to-help).
 
 ## The device family
@@ -102,15 +109,16 @@ size slightly between language packs, so the language data is not in it.
 Both images ship with an entropy of about 7.95 bits per byte and no readable
 strings, but they are protected in completely different ways.
 
-**`ExtFlashDat.bin` is solved.** It is the data image XORed with a keystream
-that repeats every 4864 bytes, built from one 256 byte table repeated 19
-times with copy `b` rotated left by `b` bytes. The key was recovered from
-unused regions of the image whose plaintext is all zero, and it decrypts
-every image we have: five Autophix language packs, the OBD2 SCANZ package
-and the flash dump of a real DM100. Decryption drops the entropy to 5.87 and
-brings out the German, Spanish and English resource text. `openphix-tool
-decrypt` does it. The strings inside are still packed record by record, so
-the container format is the next piece of work.
+**`ExtFlashDat.bin` is solved.** Every byte is bit-rotated and XORed with a
+byte from a 256 byte table, both selected by the position modulo 4864. The
+XOR table was recovered from unused regions of the image whose plaintext is
+all zero, the rotation from the statistics of the text-heavy regions, and
+the result decrypts every image we have: five Autophix language packs, the
+OBD2 SCANZ package and the flash dump of a real DM100. `openphix-tool
+decrypt` does it. The plaintext is a plain file container holding the
+diagnostic database, string tables, fonts and screens; see
+[docs/data-image-format.md](docs/data-image-format.md) and
+[tools/hixtool](tools/hixtool).
 
 **`McuCode.bin` is not solved.** It is a genuine 16 byte block cipher in ECB
 mode: identical ciphertext blocks repeat only where the plaintext repeats,
@@ -254,12 +262,15 @@ vendor-files/
   obd2-scanz-vw/        update/feedback guide, V1.60 update package, (empty) user manual
   biltema-15-1375/      manual (SV/NO/FI/DA)
 docs/
-  update-protocol.md    USB update protocol, image format, flash layout
+  update-protocol.md    USB update protocol, image cipher, flash layout
+  data-image-format.md  the data image: container, databases, strings, fonts, screens
   mcu-key-extraction.md how to pull the MCU image key off the hardware
   prior-art.md          related projects, protection bypasses, reusable protocol code
 tools/
   openphix-tool/        cross-platform CLI updater (C99, libusb-1.0)
+  hixtool/              unpacks and decodes the data image (Python 3)
   keysearch/            finds the MCU image key in a microcontroller flash dump
+firmware/               the open firmware: portable core, HAL, PC simulator
 dumps/                  flash dumps taken from real units
 ```
 
@@ -267,10 +278,9 @@ The vendor's `Update.exe` binaries are not kept here. They were decompiled to
 produce `docs/update-protocol.md`, and that write-up is what the project
 needs going forward.
 
-Future directories, once work starts:
+Future directory, once work starts:
 
 ```
-firmware/    the open firmware
 hardware/    schematics and PCB for the open reader
 ```
 
@@ -306,7 +316,7 @@ make && sudo make install        # also installs the udev rule, so no sudo below
 openphix-tool info                       # ids, version, flash size
 openphix-tool read-flash -o extflash.bin # whole 32 MiB, about 4 minutes
 openphix-tool feedback -o Feedback.bin   # the recorded bus log
-openphix-tool decrypt extflash.bin plain.bin   # remove the XOR keystream
+openphix-tool decrypt extflash.bin plain.bin   # remove the data image cipher
 ```
 
 This was done on a DM100 in September 2026; the results are

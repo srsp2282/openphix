@@ -1,0 +1,38 @@
+cmake_minimum_required(VERSION 3.13)
+project(openphix-firmware C)
+
+set(CMAKE_C_STANDARD 99)
+set(CMAKE_C_STANDARD_REQUIRED ON)
+if(NOT CMAKE_BUILD_TYPE)
+  set(CMAKE_BUILD_TYPE Release)
+endif()
+add_compile_options(-Wall -Wextra -Wshadow)
+
+# Portable core: no dependency on any port. Real hardware ports link the
+# same library.
+file(GLOB CORE_SOURCES ${CMAKE_CURRENT_SOURCE_DIR}/core/*.c)
+add_library(openphix_core STATIC ${CORE_SOURCES})
+target_include_directories(openphix_core PUBLIC include)
+
+# PC simulator
+option(OPENPHIX_SIM_X11 "Open an X11 window in the simulator" ON)
+add_executable(openphix-sim ports/sim/main.c)
+target_link_libraries(openphix-sim PRIVATE openphix_core)
+target_compile_definitions(openphix-sim PRIVATE _POSIX_C_SOURCE=200809L _DEFAULT_SOURCE)
+if(OPENPHIX_SIM_X11)
+  find_package(X11)
+  if(X11_FOUND)
+    target_compile_definitions(openphix-sim PRIVATE OPENPHIX_SIM_X11)
+    target_include_directories(openphix-sim PRIVATE ${X11_INCLUDE_DIR})
+    target_link_libraries(openphix-sim PRIVATE ${X11_LIBRARIES})
+  endif()
+endif()
+
+enable_testing()
+file(GLOB TEST_SOURCES ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_*.c)
+foreach(src ${TEST_SOURCES})
+  get_filename_component(name ${src} NAME_WE)
+  add_executable(${name} ${src} ports/sim/hal_stub.c)
+  target_link_libraries(${name} PRIVATE openphix_core)
+  add_test(NAME ${name} COMMAND ${name} ${CMAKE_CURRENT_SOURCE_DIR}/../dumps/biltema-15-1375-dm100/extflash.bin)
+endforeach()
