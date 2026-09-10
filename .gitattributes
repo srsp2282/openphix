@@ -1,0 +1,17 @@
+# Git guessed "text" for some of the vendor PDFs. That is harmless here, but a
+# clone on a machine with line-ending translation enabled would rewrite bytes
+# inside them and corrupt the files. Pin every vendor artefact to binary.
+*.pdf   binary
+*.zip   binary
+*.bin   binary
+*.exe   binary
+
+# Source and documentation stay LF on every platform.
+*.c            text eol=lf
+*.h            text eol=lf
+*.md           text eol=lf
+*.txt          text eol=lf
+*.rules        text eol=lf
+*.gitignore    text eol=lf
+Makefile       text eol=lf
+CMakeLists.txt text eol=lf
