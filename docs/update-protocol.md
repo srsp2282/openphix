@@ -105,55 +105,60 @@ different schemes:
   spreads the change over the whole block. The bootloader decrypts it into
   the MCU's internal flash; there is no read command for internal flash.
 - `ExtFlashDat.bin` is written to the external flash byte for byte and is
-  obfuscated with a repeating XOR keystream, which has been recovered. See
-  the next section.
+  obfuscated with a byte-wise rotate-and-XOR cipher, which has been
+  recovered. See the next section.
 
-## The data image keystream (solved)
+## The data image cipher (solved)
 
-`ExtFlashDat.bin` is the plaintext data image XORed with a keystream that
-repeats every 4864 bytes. The keystream is not stored as 4864 loose bytes:
-it is one 256 byte table `S` repeated 19 times, where copy number `b` is
-rotated left by `b` bytes. For a byte at offset `i` in the image,
+`ExtFlashDat.bin` is the plaintext data image passed through a byte-wise
+cipher that repeats every 4864 bytes: each byte is rotated left by 0 to 7
+bits and XORed with a byte from a 256 byte table `S`. For a byte at offset
+`i` in the image,
 
 ```
-j   = i mod 4864
-key = S[((j & 0xFF) + (j >> 8)) & 0xFF]
+j      = i mod 4864
+v      = (j & 0xFF) + (j >> 8)
+cipher = rotl8(plain, (v >> 3) & 7) ^ S[v & 0xFF]
+plain  = rotr8(cipher ^ S[v & 0xFF], (v >> 3) & 7)
 ```
 
 `S` begins `df 56 25 4e 87 75 cf 85 05 b7 9f 4c ...` and is listed in full in
 `tools/openphix-tool/src/crypto.c`. It holds 158 distinct byte values, so it
 is a fixed table rather than the output of a counter or a simple generator.
 
-How it was recovered: parts of the image are unused and their plaintext is
-all zero, so the ciphertext there is the keystream itself. Those runs are
-visible because they are exactly periodic with 4864 bytes; the longest is
-about 300 KB, which covers every keystream position 60 times over. Taking
-one such run at a 4864-aligned offset yields the whole keystream directly.
+How it was recovered, in two steps:
+
+1. Parts of the image are unused and their plaintext is all zero. Rotating
+   zero changes nothing, so the ciphertext there is `S` itself, laid out as
+   19 copies of the table, copy `b` rotated by `b` positions. Those runs are
+   visible because they are exactly periodic with 4864 bytes; the longest is
+   about 300 KB, which covers every position 60 times over.
+2. Removing the XOR alone left a plaintext with readable fragments every
+   64 bytes and garbage in between. A statistical scan over the whole image
+   (for each of the 4864 positions, which bit rotation most often turns the
+   byte into printable ASCII) gave a clear winner at every position, and the
+   winners follow the formula above exactly: the rotation steps up every
+   8 bytes, and the boundary shifts by one byte per 256 byte block, the
+   same shift the XOR table index has.
 
 Checks that it is right and complete:
 
 | Check | Result |
 |---|---|
-| Entropy of a package image | 7.93 bits/byte before, 5.87 after |
+| Entropy of a package image | 7.93 bits/byte before, 6.10 after |
 | Zero bytes | 0.4% before, 16% after |
-| Every one of the 4864 keystream positions | zero rate 13% to 20%, none dead |
-| Independent zero-plaintext runs at unrelated offsets | all reproduce the same keystream exactly |
+| Printable ASCII | 59% of all bytes after decryption |
+| File directory at offset 0 | 34 clean file names with monotonically increasing offsets |
 | Images it decrypts | five Autophix 9610 V1.61 language packs, OBD2 SCANZ FST32 V1.60, and a DM100 flash dump |
 
-The same keystream applies to every image seen, across two vendors, two
+The same cipher applies to every image seen, across two vendors, two
 firmware versions and six language packs, so the key is baked into the
-product line rather than derived per build or per device. Filler runs whose
-plaintext is `0xFF` rather than `0x00` appear as the keystream complemented,
-which is a further confirmation.
+product line rather than derived per build or per device. The plaintext is
+a simple file container; its layout and the formats of the files inside are
+described in [data-image-format.md](data-image-format.md).
 
-There is no second global layer: the zero-plaintext runs decrypt to exactly
-`0x00` over hundreds of kilobytes. The strings inside the decrypted image are
-still packed record by record, with readable literals interleaved with
-binary tokens, so a resource container format remains to be worked out. That
-is a format problem, not a key problem.
-
-`tools/openphix-tool` implements this as `decrypt` and `encrypt` (the XOR is
-its own inverse) and as `read-flash --decrypt`.
+`tools/openphix-tool` implements this as `decrypt` and `encrypt` and as
+`read-flash --decrypt`.
 
 ## External flash layout (relative to the end of flash)
 
@@ -213,8 +218,8 @@ updates from its seller at all. It is ordinary DM100 hardware underneath.
 
 - Areas the application writes itself (feedback log, DTC records,
   settings) are plain. The data image is stored exactly as in the package
-  file, so it is the application, not the bootloader, that removes the XOR
-  keystream when it reads a resource.
+  file, so it is the application, not the bootloader, that removes the
+  cipher when it reads a resource.
 
 ## Host side details worth knowing
 

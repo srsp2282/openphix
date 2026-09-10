@@ -1,6 +1,7 @@
 #include "crypto.h"
 
-/* Recovered from zero-plaintext regions of ExtFlashDat.bin; see crypto.h. */
+/* XOR table, recovered from zero-plaintext regions of ExtFlashDat.bin; see
+ * crypto.h for the rotation that goes with it. */
 const uint8_t obd_ext_sbox[256] = {
     0xdf, 0x56, 0x25, 0x4e, 0x87, 0x75, 0xcf, 0x85, 0x05, 0xb7, 0x9f, 0x4c,
     0xf5, 0x47, 0x5e, 0x4a, 0x87, 0x02, 0x74, 0x1c, 0xe9, 0xf0, 0x46, 0xcf,
@@ -26,17 +27,52 @@ const uint8_t obd_ext_sbox[256] = {
     0x6d, 0x95, 0x8c, 0xef,
 };
 
+/* Virtual position: 0..255 within a 256 byte block, shifted by the block
+ * number within the 4864 byte period. */
+static unsigned virtual_pos(unsigned j)
+{
+    return (j & 0xFFu) + (j >> 8);
+}
+
 uint8_t obd_ext_key_byte(uint64_t offset)
 {
     unsigned j = (unsigned)(offset % OBD_EXT_KEY_PERIOD);
-    return obd_ext_sbox[((j & 0xFFu) + (j >> 8)) & 0xFFu];
+    return obd_ext_sbox[virtual_pos(j) & 0xFFu];
 }
 
-void obd_ext_crypt(uint8_t *buf, size_t len, uint64_t offset)
+unsigned obd_ext_rotation(uint64_t offset)
+{
+    unsigned j = (unsigned)(offset % OBD_EXT_KEY_PERIOD);
+    return (virtual_pos(j) >> 3) & 7u;
+}
+
+static uint8_t rotl8(uint8_t x, unsigned r)
+{
+    return r ? (uint8_t)((x << r) | (x >> (8 - r))) : x;
+}
+
+static uint8_t rotr8(uint8_t x, unsigned r)
+{
+    return r ? (uint8_t)((x >> r) | (x << (8 - r))) : x;
+}
+
+void obd_ext_decrypt(uint8_t *buf, size_t len, uint64_t offset)
 {
     unsigned j = (unsigned)(offset % OBD_EXT_KEY_PERIOD);
     for (size_t i = 0; i < len; i++) {
-        buf[i] ^= obd_ext_sbox[((j & 0xFFu) + (j >> 8)) & 0xFFu];
+        unsigned v = virtual_pos(j);
+        buf[i] = rotr8(buf[i] ^ obd_ext_sbox[v & 0xFFu], (v >> 3) & 7u);
+        if (++j == OBD_EXT_KEY_PERIOD)
+            j = 0;
+    }
+}
+
+void obd_ext_encrypt(uint8_t *buf, size_t len, uint64_t offset)
+{
+    unsigned j = (unsigned)(offset % OBD_EXT_KEY_PERIOD);
+    for (size_t i = 0; i < len; i++) {
+        unsigned v = virtual_pos(j);
+        buf[i] = rotl8(buf[i], (v >> 3) & 7u) ^ obd_ext_sbox[v & 0xFFu];
         if (++j == OBD_EXT_KEY_PERIOD)
             j = 0;
     }

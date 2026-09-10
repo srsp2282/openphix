@@ -21,9 +21,8 @@ Commands:
 - `read-flash -o file [-a addr] [-l len] [--decrypt]`: dump external flash,
   optionally removing the data image obfuscation as it is read.
 - `decrypt <in> <out> [-a addr]` and `encrypt <in> <out> [-a addr]`: remove
-  or apply the `ExtFlashDat.bin` keystream. The transform is its own
-  inverse, so the two names run the same code; `-a` gives the position of
-  the input inside the image when you are working on a slice.
+  or apply the `ExtFlashDat.bin` cipher; `-a` gives the position of the
+  input inside the image when you are working on a slice.
 
 Global options go before the command: `-v` / `-vv` (progress details,
 packet traces), `--strict` (turn the mismatches the vendor tool ignores into
@@ -100,13 +99,13 @@ or its parent when the zip extracted into a single sub directory).
 ## Image obfuscation
 
 `ExtFlashDat.bin`, the 20 MB data image that holds the fonts, translations,
-fault code text and vehicle databases, is XORed with a keystream that
-repeats every 4864 bytes. The key has been recovered and is built into this
-tool (`src/crypto.c`), so `decrypt` turns a package image or a flash dump
-into the real data image. It works for every image seen so far, from both
-vendors and all language packs. The resources inside are packed record by
-record, so readable text is interleaved with binary tokens; working out
-that container format is a separate job.
+fault code text and vehicle databases, is passed through a byte-wise
+rotate-and-XOR cipher that repeats every 4864 bytes. The key table and the
+rotation rule have been recovered and are built into this tool
+(`src/crypto.c`), so `decrypt` turns a package image or a flash dump into
+the real data image, a plain file container. It works for every image seen
+so far, from both vendors and all language packs. `tools/hixtool` at the
+repository root takes it from there and unpacks the files inside.
 
 `McuCode.bin`, the microcontroller firmware, uses an unrelated 16 byte block
 cipher in ECB mode whose key sits in the device bootloader. This tool cannot
@@ -136,7 +135,7 @@ src/usb_transport.c     libusb-1.0 implementation
 src/fake.[ch]           simulated device (validates checksums and block order)
 src/device.[ch]         queries, image upload, feedback and DTC readout, update flow
 src/package.[ch]        locating files in an update package
-src/crypto.[ch]         data image keystream (recovered key table)
+src/crypto.[ch]         data image cipher (recovered key table and rotation)
 src/platform.h          sleep / tty / clock for POSIX and Windows
 src/main.c              command line interface
 tests/                  unit tests (no hardware or libusb needed)

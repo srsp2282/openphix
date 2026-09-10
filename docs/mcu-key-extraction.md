@@ -1,7 +1,7 @@
 # Getting the MCU image key off the hardware
 
-The data image (`ExtFlashDat.bin`) is already solved: it is a repeating XOR
-keystream and `openphix-tool decrypt` handles it. The MCU image
+The data image (`ExtFlashDat.bin`) is already solved: it is a repeating
+rotate-and-XOR cipher and `openphix-tool decrypt` handles it. The MCU image
 (`McuCode.bin`) is a different matter. It uses a 128-bit-block cipher in ECB
 mode whose key is not in the update packages, not in the Windows update tool
 and not derivable from the ciphertext. Roughly 300 million candidate keys
@@ -97,7 +97,7 @@ The quickest check of all is simply to try reading one word of flash. If
 
 Consumer devices very often ship at level 0 because nobody changed the
 default. This vendor left the update path unsigned, chose ECB, and protected
-the data image with a repeating XOR, so the odds here are good.
+the data image with a repeating rotate-and-XOR, so the odds here are good.
 
 ## Step 5: dump the internal flash
 

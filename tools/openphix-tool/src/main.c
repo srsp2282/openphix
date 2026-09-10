@@ -424,10 +424,9 @@ out:
     return rc;
 }
 
-/* decrypt / encrypt: the data-image transform is its own inverse, so both
- * names run the same code. Only the data image at the bottom of the flash is
- * obfuscated; the feedback log, DTC records and settings near the top are
- * stored in plain form and must not be passed through this. */
+/* decrypt / encrypt the data image. Only the data image at the bottom of the
+ * flash is obfuscated; the feedback log, DTC records and settings near the
+ * top are stored in plain form and must not be passed through this. */
 static int cmd_crypt(struct opts *o, int decrypting)
 {
     long addr = 0;
@@ -453,7 +452,10 @@ static int cmd_crypt(struct opts *o, int decrypting)
         return 2;
     }
     before = obd_ext_zero_fraction(data, len);
-    obd_ext_crypt(data, len, (uint64_t)addr);
+    if (decrypting)
+        obd_ext_decrypt(data, len, (uint64_t)addr);
+    else
+        obd_ext_encrypt(data, len, (uint64_t)addr);
     after = obd_ext_zero_fraction(data, len);
     if (write_file(out, data, len) < 0) {
         free(data);
@@ -516,7 +518,7 @@ static int cmd_read_flash(struct opts *o)
         rc = 4;
     } else {
         if (arg_flag(o, "--decrypt"))
-            obd_ext_crypt(buf, (size_t)len, (uint64_t)addr);
+            obd_ext_decrypt(buf, (size_t)len, (uint64_t)addr);
         if (write_file(out, buf, (size_t)len) == 0)
             printf("wrote %ld bytes from 0x%lx to %s%s\n", len, addr, out,
                    arg_flag(o, "--decrypt") ? " (decrypted)" : "");
