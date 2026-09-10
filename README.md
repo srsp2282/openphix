@@ -291,16 +291,26 @@ hardware/    schematics and PCB for the open reader
 2. Understand the stock update protocol. Done by decompilation, see
    `docs/update-protocol.md` and `tools/openphix-tool`. Still open: a USB
    capture against a real device to confirm it, and the cipher key.
-3. Get code running. Either through the vendor bootloader (if the image
+3. Understand the data image. Done: cipher, container and the formats of
+   the databases, strings, fonts and screens are in
+   `docs/data-image-format.md`, with `tools/hixtool` as the reference
+   decoder. Still open: the step grammar of the special function scripts,
+   the K-line forms of the fault code and datastream chunks, and the script
+   nodes of the module database.
+4. Get code running. Either through the vendor bootloader (if the image
    format can be produced) or through SWD with a full backup of the original
-   flash first.
-4. Board support: LCD, keypad, backlight, beeper, USB, SPI flash, CAN,
-   K-line, power measurement.
-5. Protocol stacks: ISO 15765 / UDS first, then KWP2000 on K-line and CAN
-   (TP2.0), then KWP1281 and TP1.6 for older cars.
-6. Feature parity with the list above, starting with generic OBD2, then VAG
+   flash first. The application layer already exists in `firmware/` and
+   runs on a PC against the vendor data image.
+5. Board support: LCD, keypad, backlight, beeper, USB, SPI flash, CAN,
+   K-line, power measurement, behind the HAL in `firmware/include`.
+6. Protocol stacks: ISO 15765 / UDS first, then KWP2000 on K-line and CAN
+   (TP2.0), then KWP1281 and TP1.6 for older cars. The command bytes,
+   connect sequences and response expressions for every module come from
+   the decoded data image, so the stacks are transport work, not database
+   work.
+7. Feature parity with the list above, starting with generic OBD2, then VAG
    fault codes and measuring blocks, then the service functions.
-7. Open hardware: a new board that is drop-in for the same enclosure and
+8. Open hardware: a new board that is drop-in for the same enclosure and
    cable, then a fully open design.
 
 ## Dumping a device
