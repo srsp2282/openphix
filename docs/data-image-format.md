@@ -93,34 +93,6 @@ each), `DsTransID.BIN` and `UDSDTCTransID.BIN` (per data set tables).
 
 The sections below describe each format.
 
-## 20. The feedback bus log (outside the data image)
-
-The 128 KiB "Feedback" area at flash end minus 0x50000 (saved by
-`openphix-tool feedback`) is written by the application. It starts with
-`AUTOPHIX` and five zero bytes, then holds records back to back until the
-first erased word (`FF FF FF FF`):
-
-```
-u32   length, counting the length field itself
-bytes payload, length - 4 bytes
-```
-
-The payload is encrypted with the image cipher of section 1, keyed by the
-payload's own offset inside the area (not the flash address). The records
-seen so far are text:
-
-```
-"Str:" id(2 hex digits) " " len(4 hex digits) string NUL junk
-```
-
-`len` counts the string and its NUL; one uninitialised byte follows. The
-Biltema unit's log holds only power-on entries, in pairs: `Str id=00
-"01.58.000"` (the software version, which the manuals call "Software
-Version" in Device Information) and `Str id=00 "AUTOPHIX"`. Records with
-bus traffic (the reason the log exists) have not been captured yet; the
-manual says the device records the next diagnostic session after Feedback
-is enabled in Tool Setup. `hixtool feedback` decodes the file.
-
 ## 4. String tables (`STRING.BIN`)
 
 `STRING.BIN` is a hix container with one member per UI language, named
@@ -443,3 +415,206 @@ routines, security access), 0xFF00 (delays).
 Open: what the three CAN link values and the dlc bit 7 select physically,
 the keepalive flag bits, and the protocols behind kind 0x08. These need a
 bus capture or the MCU firmware.
+
+## 9. The control module database (`SYSSCAN.BIN`)
+
+`SYSSCAN.BIN` drives "System Scan" and "System Selection": which addresses
+to probe, how to identify the module found there, and which data set (one
+ECU variant's configuration in FUNCFG.BIN, DsTransID.BIN and ComboSpFunc.BIN)
+applies. Every byte of the file is accounted for except an 11 byte stub at
+0x1223.
+
+### 9.1 The data set key
+
+A data set is identified by a u32 written as two u16: `sub` (an index from
+1, or 0x1001 and up, or 0xFFFF for "default") and `X` = (u8 family, u8
+module index). Families: 0x30 (K-line and TP2.0 style), 0x32 (UDS), rarely
+0x31, 0x33, 0x34; the module index is the low byte of the diagnostic
+address or 0xFF. `(0x0001, 0x0130)` is engine data set 1 of the 0x30 family;
+`(0x13D5, 0x0132)` engine data set 0x13D5 of the UDS family. This key is the
+value of the EV name tables below, the record key of FUNCFG.BIN, the key of
+the ComboSpFunc function table and (the `sub` part) the group id of the
+DsTransID measuring block texts.
+
+### 9.2 Region map (dump)
+
+| Offset | Size | Content |
+|---|---|---|
+| 0x0000000 | 12 | header: u32 12, u32 0, u32 offset of the module index |
+| 0x000000C | 130 | generic scan procedure index |
+| 0x000008E | 437 | generic scan records (21 of 38 or 57 bytes) |
+| 0x0000243 | 4055 | script nodes of the generic records |
+| 0x000122E | 1327 | 2 character code table (94 VIN model codes: 8K, 8P, 4L, FV, 3W, ...) |
+| 0x0001991 | 32841 | 3 character code table (2345 rows, each pointing at an address list) |
+| 0x000D0D0 | 131432 | 382 address lists |
+| 0x002D238 | 7369 | module index (554 entries) |
+| 0x002EF01 | to end | 509 scan records with scripts, four EV name tables, one 312 KB zero fill |
+
+### 9.3 Generic scan procedures
+
+The index at offset 12 holds `{u32 id, u8 a, u8 n, u32 record[n]}` entries
+terminated by `FF FF FF FF`. Ids 0xF001 and up are referenced from Menu.BIN,
+so they are the procedures behind the scan menu items. 0xF001 and 0xF002
+run six and five protocol passes (one 38 byte record with a script each);
+0xF003 to 0xF009 are one 57 byte record each pointing at a fixed address
+list (for example 1 2 3 9 15 17 46, or 94 95). The V1.61 package adds
+0xF00A and 0xF00B.
+
+### 9.4 Scan record
+
+Every record referenced from an index starts with `08 00 00 00`:
+
+```
+r+0   u32  8
+r+4   u32  uid, monotonically increasing through the file (a generator handle)
+r+13  u8   flags: 0x00, 0x30 or 0x81
+r+17  u8[14] parameters, non zero only for flags 0x81
+r+31  u8   2 when a script follows
+r+34  u32  script offset, always r+60
+r+37  u8   item count
+r+38  items of 7 bytes: { u16 key, u8 addr, u8 type, u16 y, u8 z }
+      tail entries of 10 bytes: { u16 n, u32 ref, u32 v }
+      u16 0xFFFF
+      (script records) nodes, EV name tables, padding up to the next record
+```
+
+The item type tells the identification method: 0x56 followed by four 0x01
+items (KWP1281 style, tail v = 0x87), 0x02 items with the module address
+(tail types 0x02 and 0x06, v = 0x71 and 0x70), 0x30/0x31/0x32 items with
+(offset 3, length 0x1C) and (offset 7, length 3), which look like substring
+descriptors for the part number match, 0x70 items on the UDS only 0x9x
+modules. Tail entries carry either a file offset (generic procedures: the
+address list to scan) or a data set key. Records with tail family 0x30 to
+0x34 enumerate the data sets that exist for the module (module 3: sub 1 to
+0x93 plus the 0xFFFF default; module 2: 147 plus default). The small v
+values (0x87, 0x71, 0x70, 0x74, 0x73, 6) are constant per type and most
+likely Cmd.BIN ids of the connect sequence for that protocol; unverified.
+
+### 9.5 Code tables and EV name tables
+
+Tables of "type 2" have an 11 byte header `{u8 2, u32 count, u16 width, u16
+sub, u16 X}` and rows `{u32 id, u32 value, u16 len, char name[len]}`.
+
+- The 2 character table (94 rows) lists VAG model codes as they appear in
+  VIN positions 7 and 8; the value is always 1 ("known").
+- The 3 character table (2345 rows, 0CJ to ZXN) maps a code to the offset of
+  an address list; scan pass 5 of 0xF001 looks a vehicle up here to choose
+  which addresses to probe.
+- The EV name tables map identification strings to data set keys: engine
+  address 1 has 5581 rows (family 0x30) and 29 (UDS), engine 2 (address
+  0x11) 5546 and 7. A name such as `EV_ECM00TDI01104L907309AC001` is
+  vendor built: type, engine kind (TDI, TFS, CPI, MPI, CSI), the VAG part
+  number (04L907309AC) and a variant. The row value is the data set key.
+
+Address lists are `{u16 count, count x {u32 address, u16 name_idx, 02 01 08
+01 02 02}}`. One list declares 43 entries but holds 27 (same in both
+images).
+
+### 9.6 Module index
+
+`{u32 address, u8 n, n x {u8 kind = 2, u32 record}}` entries terminated by
+`FF FF FF FF`. Address classes: 0x0001 to 0x00E0 plain VAG addresses (210);
+0x0601 to 0x0768 sub addresses (54); 0x800B and 0x8104 to 0x8122 extended
+addresses (13); 0x19FF "gateway, all" (the installation list scan);
+0x6000xxxx a second view of a plain address with a subset of its records
+(247, System Selection versus System Scan); 0x8000xxxx groups referenced
+from Menu.BIN for the special function menus (0x80000016 = the records of
+module 0x96 for "Battery Coding").
+
+### 9.7 How identification works
+
+1. The tool connects to an address with one of the module's records (the
+   tail type selects KWP1281, KWP2000, TP2.0 or UDS).
+2. The identification response gives the part number (KWP1281 id string,
+   KWP2000 `1A 9B`, UDS DID F187/F19E). For engines the name is looked up
+   in the EV name table, which yields the data set key. For other modules
+   the record with tail family 0x30 to 0x34 lists the existing data sets.
+3. The key selects the FUNCFG.BIN record, the DsTransID text group, the
+   ComboSpFunc function table row and, through the module type name (string
+   family 0x0100), the UDSDTCTransID section.
+
+Open: the semantics of the script nodes (u32 type 0x1E, 0x01, 0x04, 0x28
+with child pointers; type 4 nodes reference the code and EV tables), the
+uid field, and the meaning of the 0x06xx, 0x8xxx and 0xC0xx addresses.
+
+## 10. Measuring block texts (`DsTransID.BIN`)
+
+A hix container with four sections, each `u32 count` then `count x {u32
+key, u32 string_id}`, identical in both images:
+
+| Section | Records | Key | Value |
+|---|---|---|---|
+| TEXT | 68150 | `group << 16 \| block << 8 \| field`; group = the data set `sub` (0x1001 to 0x142A and 0x1B01 to 0x1C44, 868 groups), block = measuring block 1 to 0xE6, field 1 to 4 | string in family 0x0203, for example 0x10010101 to 0x02030D94 "Engine Speed-(Discrete)". Each group starts with a header record (block 0, field 0) to 0x12000000 |
+| TEXT_25H | 1630 | n | 0x02050000 + n + 1: value texts of KWP1281 0x25 responses ("ADP is OK") |
+| TEXT_DEFNAME_02H, TEXT_DEFNAME_E7H | 256 each | KWP1281 data type byte | 0x0205xxxx default field name (2 "RPM", 3 "Load", 0x82 "Duty cycle"); the two tables are identical |
+
+## 11. UDS fault code texts (`UDSDTCTransID.BIN`)
+
+A hix container with 140 sections named by module type (`EV_ACC`, `EV_ECM`,
+`EV_ESP`, `LT3_UDS`, ...); the same names live in string family 0x0100.
+Each section is `u32 count` then sorted `{u32 key, u32 string_id}`. Values
+are string ids of family 0xA1 whose low 24 bits encode the DTC (section
+4.3). For the UDS only module types the key is the raw 24 bit DTC and most
+rows are identity mappings; for the big types (EV_ECM 22159 rows, EV_ESP
+7467, EV_SteerAssis 6023) the keys are small dense indices into the type's
+DTC list held in FUNCFG.BIN. The LT3 sections use 0xA2 and 0xA3 ids.
+
+## 12. Special function scripts (`ComboSpFunc.BIN`)
+
+```
+u32   count                          181 in the dump, 257 in V1.61
+count x { u8 variant, u8 kind, u16 function, u32 offset }
+function table: rows { u16 sub, u16 X, u8 n, n x { u8 variant, u8 kind, u16 function } }
+                4983 rows, then FF FF FF FF
+records
+```
+
+`kind` uses the same family codes as the SYSSCAN tail types (1, 2, 4, 5, 6
+for the protocol attempt types, 0x30 and 0x32 for the data set families),
+so a function has one script per protocol. Function numbers are the
+special function menu items: 1 service reset (its records use string
+0x01083001), 2 throttle learning, 3 EPB (0x0108202F "Replace Brake Pads"),
+5 injector adaptation, 6 DPF, and so on. The function table says which
+functions a data set supports: `(1, 0x0130)` engine data set 1 supports
+`(1, 0x30, 2)`.
+
+A record starts with a flag byte and the title string id (family 0x0108),
+then an entry count and entries of `{u32 string_id, u32 pointer}`, an
+8 byte trailer with the variant number and a function group byte (0xF0
+service, 0xF1 EPB, 0xF4 injector adaptation). The steps behind the pointers
+are nodes in the same style as the SYSSCAN scripts: string ids (titles,
+prompts, results), child pointer lists, length prefixed screen image names
+(`ToolRetractPump_P1.BIN`, `ReleaeEPB_P1.BIN`, `BatInfo_P1.BIN`) followed by
+a u32 10000000 or 20000000 (10 s or 20 s), and `{u8 tag, u32}` operands.
+Across all records: 10594 string ids, 6797 pointers, 31 image names. The
+step grammar itself (which bytes are bus commands, expected responses and
+branches) is open and needs either a bus capture of a special function or
+the MCU firmware.
+
+## 20. The feedback bus log (outside the data image)
+
+The 128 KiB "Feedback" area at flash end minus 0x50000 (saved by
+`openphix-tool feedback`) is written by the application. It starts with
+`AUTOPHIX` and five zero bytes, then holds records back to back until the
+first erased word (`FF FF FF FF`):
+
+```
+u32   length, counting the length field itself
+bytes payload, length - 4 bytes
+```
+
+The payload is encrypted with the image cipher of section 1, keyed by the
+payload's own offset inside the area (not the flash address). The records
+seen so far are text:
+
+```
+"Str:" id(2 hex digits) " " len(4 hex digits) string NUL junk
+```
+
+`len` counts the string and its NUL; one uninitialised byte follows. The
+Biltema unit's log holds only power-on entries, in pairs: `Str id=00
+"01.58.000"` (the software version, which the manuals call "Software
+Version" in Device Information) and `Str id=00 "AUTOPHIX"`. Records with
+bus traffic (the reason the log exists) have not been captured yet; the
+manual says the device records the next diagnostic session after Feedback
+is enabled in Tool Setup. `hixtool feedback` decodes the file.

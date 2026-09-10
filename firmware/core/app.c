@@ -4,6 +4,8 @@
 
 #include "openphix/app.h"
 #include "openphix/cmd.h"
+#include "openphix/dtc.h"
+#include "openphix/sysscan.h"
 #include "openphix/exp.h"
 #include "openphix/font.h"
 #include "openphix/str.h"
@@ -119,6 +121,52 @@ static int tool_cmd(int argc, char **argv)
     return 0;
 }
 
+/* modules: list the module index with names and data set counts */
+static int tool_modules(int argc, char **argv)
+{
+    struct sysscan_module m;
+    struct sysscan_record r;
+    struct sysscan_tail t;
+    char buf[64];
+    (void)argc; (void)argv;
+    for (uint32_t i = 0; i < sysscan_module_count(); i++) {
+        int sets = 0;
+        if (sysscan_module(i, &m) != 0)
+            continue;
+        for (uint8_t k = 0; k < m.count; k++) {
+            if (sysscan_record(m.record[k], &r) != 0)
+                continue;
+            for (uint16_t j = 0; j < r.tail_count; j++)
+                if (sysscan_tail(&r, j, &t) == 0 && (t.x & 0xFF) >= 0x30 && (t.x & 0xFF) <= 0x34)
+                    sets++;
+        }
+        buf[0] = 0;
+        if (m.address < 0x10000)
+            str_get(sysscan_module_name_id(m.address), buf, sizeof buf);
+        printf("%08x records=%u sets=%-4d %s\n", (unsigned)m.address, m.count, sets, buf);
+    }
+    return 0;
+}
+
+/* dtc <P0123|uds hex> : fault code text */
+static int tool_dtc(int argc, char **argv)
+{
+    char buf[160];
+    for (int i = 0; i < argc; i++) {
+        const char *s = argv[i];
+        uint32_t id = 0;
+        if (strchr("PCBU", s[0]) && strlen(s) == 5) {
+            uint16_t code = (uint16_t)(((uint16_t)(strchr("PCBU", s[0]) - "PCBU") << 14) | strtoul(s + 1, NULL, 16));
+            id = dtc_obd_string(code);
+        } else {
+            uint32_t n = (uint32_t)strtoul(s, NULL, 0);
+            id = n > 0xFFFF ? dtc_uds_string((uint16_t)(n >> 8), (uint8_t)n) : dtc_vag_string((uint16_t)n);
+        }
+        printf("%s: %s\n", s, id ? str_get_or_id(id, buf, sizeof buf) : "(no text)");
+    }
+    return 0;
+}
+
 int app_tool(int argc, char **argv)
 {
     if (res_init(&g_image) != 0) {
@@ -128,8 +176,10 @@ int app_tool(int argc, char **argv)
     str_init(&g_image);
     exp_init(&g_image);
     cmd_init(&g_image);
+    dtc_init(&g_image);
+    sysscan_init(&g_image);
     if (argc < 1) {
-        hal_log("tools: ls, str <id>..., text [string], exp <id> [bytes], cmd <id>");
+        hal_log("tools: ls, str <id>..., text [string], exp <id> [bytes], cmd <id>, modules, dtc <code>...");
         return 2;
     }
     if (strcmp(argv[0], "ls") == 0)
@@ -142,6 +192,10 @@ int app_tool(int argc, char **argv)
         return tool_exp(argc - 1, argv + 1);
     if (strcmp(argv[0], "cmd") == 0)
         return tool_cmd(argc - 1, argv + 1);
+    if (strcmp(argv[0], "modules") == 0)
+        return tool_modules(argc - 1, argv + 1);
+    if (strcmp(argv[0], "dtc") == 0)
+        return tool_dtc(argc - 1, argv + 1);
     hal_log("unknown tool %s", argv[0]);
     return 2;
 }
