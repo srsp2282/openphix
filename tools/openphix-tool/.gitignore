@@ -1,0 +1,7 @@
+build*/
+*.o
+openphix-tool
+openphix-tool.exe
+tests/test_protocol
+tests/test_device
+tests/test_crypto

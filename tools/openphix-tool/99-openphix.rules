@@ -1,0 +1,8 @@
+# udev rules for Autophix DM100/DM300 based scan tools (Autophix 9610,
+# Ancel VD700, OBD2 SCANZ FST32, Biltema 15-1375 and other rebrands).
+# Installed by "sudo make install" or "sudo cmake --install build", which also
+# reloads udev. To place it by hand: copy to /etc/udev/rules.d/ and run
+# sudo udevadm control --reload-rules && sudo udevadm trigger
+SUBSYSTEM=="usb", ATTR{idVendor}=="0483", ATTR{idProduct}=="5265", MODE="0660", TAG+="uaccess", GROUP="plugdev"
+SUBSYSTEM=="usb", ATTR{idVendor}=="0483", ATTR{idProduct}=="5750", MODE="0660", TAG+="uaccess", GROUP="plugdev"
+SUBSYSTEM=="usb", ATTR{idVendor}=="2e88", ATTR{idProduct}=="4605", MODE="0660", TAG+="uaccess", GROUP="plugdev"
