@@ -359,8 +359,114 @@ def describe(payload):
     return payload.hex(" ")
 
 
+def describe_ad410_event(event):
+    """Readable one-line form of a parsed AD410 logical event."""
+    kind = event["type"]
+
+    if kind == "str":
+        return "Str id=%02x %r" % (
+            event["id"],
+            event["text"],
+        )
+
+    if kind == "ask":
+        return "Ask tick=%d data=%s" % (
+            event["tick"],
+            event["can_data"].hex(" "),
+        )
+
+    if kind == "ans":
+        if not event["frames"]:
+            return "Ans tick=%d frames=0" % event["tick"]
+
+        frames = []
+
+        for frame in event["frames"]:
+            frames.append(
+                "0x%03x[%d]=%s"
+                % (
+                    frame["can_id"],
+                    frame["dlc"],
+                    frame["data"].hex(" "),
+                )
+            )
+
+        return "Ans tick=%d frames=%d %s" % (
+            event["tick"],
+            event["frame_count"],
+            " | ".join(frames),
+        )
+
+    return "Unknown %s" % event["raw"].hex(" ")
+
+
+def _cmd_feedback_ad410(a, data):
+    """Display AD410 Feedback stored records as logical events."""
+    from collections import Counter
+
+    stored_count = 0
+    logical_count = 0
+    string_counts = Counter()
+
+    for stored_off, payload in records(data, a.profile):
+        stored_count += 1
+
+        for logical_off, tag, raw, boundary_error in logical_events(payload):
+            logical_count += 1
+
+            location = "0x%05x" % stored_off
+
+            if logical_off:
+                location += "+0x%x" % logical_off
+
+            if boundary_error:
+                print(
+                    "%s malformed: %s: %s"
+                    % (
+                        location,
+                        boundary_error,
+                        raw.hex(" "),
+                    )
+                )
+                continue
+
+            try:
+                event = parse_logical_event(raw)
+            except ValueError as exc:
+                print(
+                    "%s malformed: %s: %s"
+                    % (
+                        location,
+                        exc,
+                        raw.hex(" "),
+                    )
+                )
+                continue
+
+            text = describe_ad410_event(event)
+
+            if event["type"] == "str" and not a.verbose:
+                string_counts[text] += 1
+                continue
+
+            print("%s %s" % (location, text))
+
+    if not a.verbose:
+        for text, count in string_counts.most_common():
+            print("%6d x %s" % (count, text))
+
+    print(
+        "%d stored records, %d logical events"
+        % (stored_count, logical_count)
+    )
+
+
 def cmd_feedback(a):
     data = open(a.file, "rb").read()
+
+    if a.profile == "ad410":
+        return _cmd_feedback_ad410(a, data)
+
     n = 0
 
     for off, payload in records(data, a.profile):
