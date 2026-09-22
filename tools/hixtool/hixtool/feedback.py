@@ -1,7 +1,7 @@
 """The "Feedback" bus log (the 128 KiB area at flash end - 0x50000, saved by
 `openphix-tool feedback` as Feedback.bin).
 
-    0x00  "AUTOPHIX" + 5 zero bytes
+    0x00  13-byte header beginning with "AUTOPHIX"
     0x0D  records, back to back, until 0xFF 0xFF 0xFF 0xFF:
             u32   length, counting itself
             bytes payload (length - 4), encoded according to the selected
@@ -19,7 +19,8 @@ import struct
 from . import cipher
 
 
-MAGIC = b"AUTOPHIX\0\0\0\0\0"
+HEADER_PREFIX = b"AUTOPHIX"
+HEADER_SIZE = 13
 
 
 def _decryptor(profile):
@@ -36,12 +37,12 @@ def _decryptor(profile):
 
 def records(data, profile="legacy"):
     """Yield (offset, plaintext payload) for every stored record."""
-    if not data.startswith(b"AUTOPHIX"):
+    if not data.startswith(HEADER_PREFIX):
         return
 
     decrypt = _decryptor(profile)
 
-    p = len(MAGIC)
+    p = HEADER_SIZE
 
     while p + 4 <= len(data):
         if data[p:p + 4] == b"\xff\xff\xff\xff":

@@ -36,9 +36,12 @@ printable ASCII than any other, and the winners follow the formula above
 without exception. The rotation steps up by one every eight bytes; the
 boundary moves by one byte per 256 byte block, exactly like the table index.
 
-The application on the device removes the cipher when it reads a resource.
-Areas the application writes itself (feedback log, DTC review records,
-settings near the top of the flash) are not encrypted.
+The application on the device removes the image cipher when it reads a
+resource. Application-written areas are not uniform: DTC review records and
+settings observed so far are plain, while Feedback payload encoding depends
+on the device/profile. The older Feedback format uses the image cipher above;
+the tested ANCEL AD410 uses the same position and rotation schedule with a
+different fixed 256-byte XOR table. See section 16.
 
 ## 2. The hix container
 
@@ -767,28 +770,238 @@ and the item lists in `firmware/core/funcfg.c`.
 
 ## 16. The feedback bus log (outside the data image)
 
-The 128 KiB "Feedback" area at flash end minus 0x50000 (saved by
-`openphix-tool feedback`) is written by the application. It starts with
-`AUTOPHIX` and five zero bytes, then holds records back to back until the
-first erased word (`FF FF FF FF`):
+The 128 KiB "Feedback" area at flash end minus 0x50000 is saved by
+`openphix-tool feedback` as `Feedback.bin`. The area begins with a 13-byte
+header whose first eight bytes are `AUTOPHIX`. The older Biltema capture has
+five zero bytes after the name. The tested AD410 capture has `00 02 00 00 00`
+there; the meaning of the final four-byte value is not known.
+
+Stored records follow the 13-byte header and continue until the next record
+would begin with the erased word `FF FF FF FF`:
 
 ```
-u32   length, counting the length field itself
-bytes payload, length - 4 bytes
+u32le length       total stored-record length, including this field
+bytes payload      length - 4 bytes
 ```
 
-The payload is encrypted with the image cipher of section 1, keyed by the
-payload's own offset inside the area (not the flash address). The records
-seen so far are text:
+A stored record is a container, not necessarily one logical event. At least
+one AD410 stored payload contains two complete logical `Ask:` events. Payload
+decoding must therefore be done using the original Feedback-area-relative
+byte offsets before logical events are split.
+
+### 16.1 Payload encoding profiles
+
+`hixtool feedback` retains the older behavior as the default `legacy`
+profile.
+
+For the legacy format, each stored payload uses the image cipher of section
+1, keyed by the payload byte's offset inside the Feedback area.
+
+Controlled repeated captures from an ANCEL AD410 establish a different
+Feedback profile. It uses the same 4864-byte position and rotation schedule
+as the image cipher, but a different fixed 256-byte table:
 
 ```
-"Str:" id(2 hex digits) " " len(4 hex digits) string NUL junk
+j = offset mod 4864
+v = (j & 0xFF) + (j >> 8)
+k = v & 0xFF
+r = (v >> 3) & 7
+
+plain = rotr8(cipher, r) ^ K[k]
 ```
 
-`len` counts the string and its NUL; one uninitialised byte follows. The
-Biltema unit's log holds only power-on entries, in pairs: `Str id=00
-"01.58.000"` (the software version, which the manuals call "Software
-Version" in Device Information) and `Str id=00 "AUTOPHIX"`. Records with
-bus traffic (the reason the log exists) have not been captured yet; the
-manual says the device records the next diagnostic session after Feedback
-is enabled in Tool Setup. `hixtool feedback` decodes the file.
+`offset` is the original Feedback-area-relative payload-byte offset. It is
+not reset at stored-record or logical-event boundaries.
+
+The canonical post-rotation table `K` is in
+`tools/hixtool/hixtool/feedback_ad410.py`. Its SHA-256 is:
+
+```
+b64f5505aa9f324b35763784fa66f33ce9b048afe13640706c1638e39b7571c4
+```
+
+This profile was recovered independently from repeated identical diagnostic
+sessions and then validated against both bus records and historical `Str:`
+records. It should not be assumed to apply to other AUTOPHIX models without
+capture evidence.
+
+### 16.2 Logical events
+
+After a stored payload is decoded, logical events are parsed from its start.
+`Ask:` and `Ans:` share this binary header:
+
+```
+char[4] tag        "Ask:" or "Ans:"
+u16le   extent
+u32be   tick
+bytes   body[extent - 4]
+```
+
+The total logical-event size is therefore `6 + extent`. `extent` includes
+the four-byte tick and the body but not the tag or extent field.
+
+`tick` is an unsigned big-endian counter. Its time unit, epoch and reset
+trigger are not known. Captures show genuine carry across `0xFFFF`, and a
+decrease in the observed counter is treated by `hixtool` as the beginning
+of a new counter epoch rather than silently joining the values.
+
+Unknown or malformed logical tags are not resynchronised by scanning for
+magic byte strings inside the payload. The remaining bytes are preserved as
+unknown data and parsing resumes only at the next stored-record boundary.
+
+Whether a logical event can span two stored records has not been observed.
+
+### 16.3 `Ask:` transmit events
+
+The observed AD410 `Ask:` form is:
+
+```
+"Ask:"
+u16le extent = 12
+u32be tick
+u8     data[8]
+```
+
+The eight data bytes are one transmitted classic-CAN data field. No transmit
+CAN identifier is present in the observed `Ask:` record, so `hixtool` does
+not infer one.
+
+Examples include generic OBD-II Single Frames such as:
+
+```
+02 01 0c 00 00 00 00 00
+```
+
+and ISO-TP Flow Control:
+
+```
+30 00 00 00 00 00 00 00
+```
+
+### 16.4 `Ans:` receive batches
+
+The AD410 `Ans:` body is an ordered batch of zero or more received CAN
+frames:
+
+```
+"Ans:"
+u16le extent
+u32be tick
+u8     frame_count
+
+repeat frame_count times:
+    u8     entry_length
+    u8     dlc
+    u16be  can_id
+    u8     data[dlc]
+```
+
+For every observed entry:
+
+```
+entry_length = 3 + dlc
+```
+
+so `entry_length` excludes its own byte.
+
+The tested capture validates batches containing zero, one, two and three
+frames. With DLC 8 the corresponding total logical-event sizes are 11, 23,
+35 and 47 bytes.
+
+A zero-frame `Ans:` is represented by `hixtool` as an empty receive batch.
+Eight such batches in the tested capture follow repeated Mode 09 PID 01
+requests after approximately 500 raw counter ticks. That pattern is
+consistent with a receive timeout, but the format itself only establishes
+that zero frames were recorded, so the parser does not label them
+"timeouts".
+
+Multiple responders can occur in one batch. For example, a Mode 01 PID 00
+query produced responses from both CAN IDs `0x7E8` and `0x7E9`; entry order
+is preserved.
+
+### 16.5 `Str:` events
+
+Text events retain the older ASCII form:
+
+```
+"Str:"
+id              2 ASCII hex digits
+" "
+text_length     4 ASCII hex digits
+text bytes
+terminator/trailing byte
+```
+
+Two length conventions have been observed. Most older records include the
+terminating NUL in `text_length` and then contain one additional trailing
+byte. Some AD410 strings, including `ECU 1 (#e8)`, declare only the text
+bytes and use the following byte as the NUL. Both forms have a total logical
+size of `12 + text_length`.
+
+### 16.6 ISO-TP and ordering
+
+`Ans:` batches can contain ISO-TP Single Frames, First Frames and Consecutive
+Frames. `hixtool` can parse and reassemble an ordered ISO-TP frame sequence
+when the frames needed for a message are present.
+
+The Feedback log is not a timestamped wire capture.
+
+One observed Mode 09 PID 02 transaction is stored logically as:
+
+```
+Ask: diagnostic request
+Ask: ISO-TP Flow Control
+Ans: First Frame + Consecutive Frame + Consecutive Frame
+```
+
+On the physical CAN bus the ECU's First Frame necessarily preceded the
+tester's Flow Control. The logger therefore buffered received frames before
+writing the `Ans:` batch. Stored-event order, logical-event order and
+within-batch frame order should be preserved, but reconstructed physical
+interleaving must be identified as inferred.
+
+The `Ans:` tick is consequently an event/batch counter value, not a
+per-frame timestamp.
+
+### 16.7 Diagnostic transaction pairing
+
+For the tested AD410 capture, diagnostic transactions can be paired without
+nearest-neighbour or timing heuristics.
+
+There are 599 diagnostic `Ask:` events:
+
+```
+598  diagnostic Ask -> Ans
+  1  diagnostic Ask -> Flow Control Ask -> Ans
+```
+
+All 599 pair conservatively within the same counter epoch. The capture also
+contains exactly one unpaired `Ans:`; it is the first bus event in the file,
+so its preceding request was not recorded.
+
+The transaction layer deliberately does not search forward across unrelated
+events or pair across counter epochs.
+
+### 16.8 Scope and remaining unknowns
+
+Established for the tested AD410 capture set:
+
+- the alternate fixed Feedback table and rotation schedule
+- stored-record boundaries
+- `Ask:` and generalized `Ans:` structure
+- zero-, one-, two- and three-frame receive batches
+- big-endian raw tick encoding
+- ISO-TP parsing/reassembly for the observed classic-CAN forms
+- conservative request/response transaction pairing
+
+Still unknown or intentionally not inferred:
+
+- tick time unit and reset trigger
+- transmit CAN identifier for `Ask:`
+- semantic distinction between an empty receive batch and a timeout
+- whether logical events can span stored records
+- unobserved `Ask:`/`Ans:` variants
+- whether the AD410 table applies to other devices or firmware families
+
+`hixtool feedback Feedback.bin --profile ad410` selects the AD410 decoder.
+The default remains the older `legacy` profile.

@@ -212,14 +212,17 @@ updates from its seller at all. It is ordinary DM100 hardware underneath.
   |---|---|
   | 0x0000000 .. 0x13E4F99 | data image (`ExtFlashDat.bin` content, about 20.8 MB) |
   | 0x13E4F9A .. 0x1FAFFFF | erased (0xFF) |
-  | 0x1FB0000 .. 0x1FCB127 | feedback log: `AUTOPHIX` header, then length-prefixed records (LE32 length, mostly 26 bytes) separated by 0xFF; `Feedback.bin` is exactly this 128 KiB area |
+  | 0x1FB0000 .. 0x1FCB127 | feedback log: `AUTOPHIX` header, then back-to-back length-prefixed stored records (LE32 total length; mostly 26 bytes on this unit), followed by erased 0xFF; `Feedback.bin` is exactly this 128 KiB area |
   | 0x1FD0000 .. 0x1FEDFFF | DTC review area, erased on this unit |
   | 0x1FF0000 | settings block, `03 00 01 00 01 00` then 0xFF (probably language index, beeper, startup instructions) |
 
-- Areas the application writes itself (feedback log, DTC records,
-  settings) are plain. The data image is stored exactly as in the package
-  file, so it is the application, not the bootloader, that removes the
-  cipher when it reads a resource.
+- Application-written areas are not uniform. DTC review records and
+  settings observed so far are plain. Feedback stored-record payloads are
+  position encoded: the older format uses the image cipher, while the tested
+  AD410 uses the same rotation schedule with a different fixed 256-byte XOR
+  table. See section 16 of `data-image-format.md`. The data image itself is
+  stored exactly as in the package file, so it is the application, not the
+  bootloader, that removes the image cipher when it reads a resource.
 
 ## Host side details worth knowing
 

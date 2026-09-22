@@ -150,6 +150,42 @@ class FeedbackAd410CipherTests(unittest.TestCase):
                 )
 
 
+class FeedbackStoredRecordTests(unittest.TestCase):
+
+    def test_ad410_nonzero_header_tail(self):
+        # AD410 header observed as:
+        #   AUTOPHIX 00 02 00 00 00
+        #
+        # records() should depend on the 8-byte signature and fixed
+        # 13-byte header size, not require five zero bytes.
+        fixture = FIXTURES["rpm_zero_ask"]
+
+        data = (
+            b"AUTOPHIX"
+            b"\x00\x02\x00\x00\x00"
+            + fixture["raw"]
+            + b"\xff\xff\xff\xff"
+        )
+
+        # This synthetic record is relocated to offset 0x0D, so its
+        # ciphertext cannot be expected to decode to the original
+        # plaintext.  The regression here is specifically outer-record
+        # recognition and boundary handling.
+        records = list(
+            feedback.records(
+                data,
+                profile="ad410",
+            )
+        )
+
+        self.assertEqual(len(records), 1)
+        self.assertEqual(records[0][0], 13)
+        self.assertEqual(
+            len(records[0][1]),
+            len(fixture["plain"]),
+        )
+
+
 class FeedbackLogicalEventTests(unittest.TestCase):
 
     def test_rpm_zero_ask(self):
