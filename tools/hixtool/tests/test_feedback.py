@@ -848,6 +848,49 @@ class FeedbackTransactionTests(unittest.TestCase):
             0,
         )
 
+    def test_unknown_ask_pci_is_preserved_without_crashing(self):
+        unknown = feedback.parse_bus_event(
+            ask(
+                90,
+                bytes.fromhex(
+                    "40 00 00 00 00 00 00 00"
+                ),
+            )
+        )
+
+        request = feedback.parse_bus_event(
+            ask(
+                100,
+                bytes.fromhex(
+                    "02 01 0c 00 00 00 00 00"
+                ),
+            )
+        )
+
+        response = feedback.parse_bus_event(
+            ans(
+                104,
+                [
+                    (
+                        0x7E8,
+                        bytes.fromhex(
+                            "04 41 0c 00 00 aa aa aa"
+                        ),
+                    ),
+                ],
+            )
+        )
+
+        result = feedback.build_diagnostic_transactions([
+            self._item(0, 0, unknown),
+            self._item(1, 0, request),
+            self._item(2, 0, response),
+        ])
+
+        self.assertEqual(len(result["transactions"]), 1)
+        self.assertEqual(result["orphan_answers"], [])
+        self.assertEqual(result["auxiliary_asks"], [])
+
     def test_does_not_pair_across_epoch(self):
         request = feedback.parse_bus_event(
             ask(

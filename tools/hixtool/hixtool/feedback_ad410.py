@@ -60,6 +60,16 @@ assert (
 )
 
 
+def _rotr8(value, rotation):
+    """Rotate one byte right by 0..7 bits."""
+    if not rotation:
+        return value
+    return (
+        (value >> rotation)
+        | (value << (8 - rotation))
+    ) & 0xff
+
+
 def _state(offset):
     """Return (key_index, rotation) for a Feedback-area-relative offset."""
     j = offset % cipher.PERIOD
@@ -74,7 +84,7 @@ def decrypt(data, offset=0):
     for i, value in enumerate(data):
         key_index, rotation = _state(offset + i)
         out[i] = (
-            cipher._rotr(value, rotation)
+            _rotr8(value, rotation)
             ^ FEEDBACK_POST_ROTATION_KEY[key_index]
         )
 

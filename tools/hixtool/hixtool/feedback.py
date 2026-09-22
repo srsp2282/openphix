@@ -552,6 +552,14 @@ def classify_ask_event(event):
     return parsed["type"]
 
 
+def _classify_ask_or_none(event):
+    """Return an Ask classification, or None for an unknown PCI variant."""
+    try:
+        return classify_ask_event(event)
+    except ValueError:
+        return None
+
+
 def parsed_bus_events(data, profile="ad410"):
     """Return parsed Ask:/Ans: events in stored/logical order.
 
@@ -640,10 +648,7 @@ def build_diagnostic_transactions(bus_events):
         if event["type"] != "ask":
             continue
 
-        try:
-            kind = classify_ask_event(event)
-        except ValueError:
-            continue
+        kind = _classify_ask_or_none(event)
 
         if kind != "diagnostic":
             continue
@@ -666,7 +671,7 @@ def build_diagnostic_transactions(bus_events):
 
         elif (
             nxt["event"]["type"] == "ask"
-            and classify_ask_event(nxt["event"]) == "flow_control"
+            and _classify_ask_or_none(nxt["event"]) == "flow_control"
             and i + 2 < len(bus_events)
         ):
             candidate = bus_events[i + 2]
@@ -713,7 +718,7 @@ def build_diagnostic_transactions(bus_events):
         for item in bus_events
         if (
             item["event"]["type"] == "ask"
-            and classify_ask_event(item["event"]) == "flow_control"
+            and _classify_ask_or_none(item["event"]) == "flow_control"
             and item["index"] not in used_auxiliary
         )
     ]
