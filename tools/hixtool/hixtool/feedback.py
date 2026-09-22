@@ -526,6 +526,204 @@ def reassemble_isotp_frames(frames):
     }
 
 
+def classify_ask_event(event):
+    """Classify one parsed Ask event by its ISO-TP PCI.
+
+    Returns:
+        "diagnostic"    observed Single Frame diagnostic request
+        "flow_control"  ISO-TP Flow Control frame
+        other ISO-TP frame type strings when encountered
+
+    No transmit CAN ID is inferred here because the observed Ask record
+    format does not contain one.
+    """
+    if event.get("type") != "ask":
+        raise ValueError("event is not an Ask")
+
+    parsed = parse_isotp_frame(event["can_data"])
+
+    if parsed["type"] == "single":
+        return "diagnostic"
+
+    if parsed["type"] == "flow_control":
+        return "flow_control"
+
+    return parsed["type"]
+
+
+def parsed_bus_events(data, profile="ad410"):
+    """Return parsed Ask:/Ans: events in stored/logical order.
+
+    Each item contains storage location metadata, parsed event data, and a
+    counter epoch.  A decrease in the raw tick begins a new epoch.
+
+    This is deliberately a stored/logical sequence, not a reconstructed
+    physical wire trace.
+    """
+    out = []
+
+    epoch = 0
+    previous_tick = None
+    bus_index = 0
+
+    for stored_index, (stored_offset, payload) in enumerate(
+        records(data, profile=profile)
+    ):
+        for logical_offset, tag, raw, boundary_error in logical_events(payload):
+            if boundary_error:
+                raise ValueError(
+                    "malformed logical event at stored record %d + %d: %s"
+                    % (
+                        stored_index,
+                        logical_offset,
+                        boundary_error,
+                    )
+                )
+
+            event = parse_logical_event(raw)
+
+            if event["type"] not in ("ask", "ans"):
+                continue
+
+            tick = event["tick"]
+
+            if previous_tick is not None and tick < previous_tick:
+                epoch += 1
+
+            out.append({
+                "index": bus_index,
+                "stored_index": stored_index,
+                "stored_offset": stored_offset,
+                "logical_offset": logical_offset,
+                "epoch": epoch,
+                "event": event,
+            })
+
+            bus_index += 1
+            previous_tick = tick
+
+    return out
+
+
+def build_diagnostic_transactions(bus_events):
+    """Pair diagnostic requests with receive batches conservatively.
+
+    Accepted stored/logical patterns are only:
+
+        diagnostic Ask -> Ans
+
+    and the one observed ISO-TP form:
+
+        diagnostic Ask -> Flow Control Ask -> Ans
+
+    No searching, nearest-neighbor matching, or cross-epoch pairing is
+    performed.
+
+    The Flow Control bridge describes Feedback storage/logical ordering.
+    It must not be interpreted as literal physical wire chronology: the
+    ECU First Frame necessarily preceded the tester's Flow Control on the
+    actual bus even when the logger later stores the RX frames together.
+
+    Returns a dictionary containing:
+        transactions
+        orphan_answers
+        auxiliary_asks
+    """
+    transactions = []
+    used_answers = set()
+    used_auxiliary = set()
+
+    for i, item in enumerate(bus_events):
+        event = item["event"]
+
+        if event["type"] != "ask":
+            continue
+
+        try:
+            kind = classify_ask_event(event)
+        except ValueError:
+            continue
+
+        if kind != "diagnostic":
+            continue
+
+        if i + 1 >= len(bus_events):
+            continue
+
+        nxt = bus_events[i + 1]
+
+        if nxt["epoch"] != item["epoch"]:
+            continue
+
+        response = None
+        auxiliary = []
+        pairing = None
+
+        if nxt["event"]["type"] == "ans":
+            response = nxt
+            pairing = "immediate"
+
+        elif (
+            nxt["event"]["type"] == "ask"
+            and classify_ask_event(nxt["event"]) == "flow_control"
+            and i + 2 < len(bus_events)
+        ):
+            candidate = bus_events[i + 2]
+
+            if (
+                candidate["epoch"] == item["epoch"]
+                and candidate["event"]["type"] == "ans"
+            ):
+                auxiliary = [nxt]
+                response = candidate
+                pairing = "flow_control_bridge"
+                used_auxiliary.add(nxt["index"])
+
+        if response is None:
+            continue
+
+        used_answers.add(response["index"])
+
+        transactions.append({
+            "request": item,
+            "auxiliary": auxiliary,
+            "response": response,
+            "pairing": pairing,
+            "tick_delta": (
+                response["event"]["tick"]
+                - item["event"]["tick"]
+            ),
+            "empty_receive_batch": (
+                response["event"]["frame_count"] == 0
+            ),
+        })
+
+    orphan_answers = [
+        item
+        for item in bus_events
+        if (
+            item["event"]["type"] == "ans"
+            and item["index"] not in used_answers
+        )
+    ]
+
+    auxiliary_asks = [
+        item
+        for item in bus_events
+        if (
+            item["event"]["type"] == "ask"
+            and classify_ask_event(item["event"]) == "flow_control"
+            and item["index"] not in used_auxiliary
+        )
+    ]
+
+    return {
+        "transactions": transactions,
+        "orphan_answers": orphan_answers,
+        "auxiliary_asks": auxiliary_asks,
+    }
+
+
 def describe_ad410_event(event):
     """Readable one-line form of a parsed AD410 logical event."""
     kind = event["type"]

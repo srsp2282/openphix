@@ -566,5 +566,291 @@ class FeedbackIsoTpTests(unittest.TestCase):
         )
 
 
+class FeedbackTransactionTests(unittest.TestCase):
+
+    def _item(self, index, epoch, event):
+        return {
+            "index": index,
+            "stored_index": index,
+            "stored_offset": 0x100 + index,
+            "logical_offset": 0,
+            "epoch": epoch,
+            "event": event,
+        }
+
+    def test_classify_diagnostic_ask(self):
+        event = feedback.parse_bus_event(
+            ask(
+                100,
+                bytes.fromhex(
+                    "02 01 0c 00 00 00 00 00"
+                ),
+            )
+        )
+
+        self.assertEqual(
+            feedback.classify_ask_event(event),
+            "diagnostic",
+        )
+
+    def test_classify_flow_control(self):
+        event = feedback.parse_bus_event(
+            ask(
+                110,
+                bytes.fromhex(
+                    "30 00 00 00 00 00 00 00"
+                ),
+            )
+        )
+
+        self.assertEqual(
+            feedback.classify_ask_event(event),
+            "flow_control",
+        )
+
+    def test_immediate_request_response_pair(self):
+        request = feedback.parse_bus_event(
+            ask(
+                100,
+                bytes.fromhex(
+                    "02 01 0c 00 00 00 00 00"
+                ),
+            )
+        )
+
+        response = feedback.parse_bus_event(
+            ans(
+                104,
+                [
+                    (
+                        0x7E8,
+                        bytes.fromhex(
+                            "04 41 0c 00 00 aa aa aa"
+                        ),
+                    ),
+                ],
+            )
+        )
+
+        result = feedback.build_diagnostic_transactions([
+            self._item(0, 0, request),
+            self._item(1, 0, response),
+        ])
+
+        self.assertEqual(
+            len(result["transactions"]),
+            1,
+        )
+
+        tx = result["transactions"][0]
+
+        self.assertEqual(tx["pairing"], "immediate")
+        self.assertEqual(tx["tick_delta"], 4)
+        self.assertFalse(tx["empty_receive_batch"])
+        self.assertEqual(tx["auxiliary"], [])
+        self.assertEqual(result["orphan_answers"], [])
+        self.assertEqual(result["auxiliary_asks"], [])
+
+    def test_empty_receive_batch(self):
+        request = feedback.parse_bus_event(
+            ask(
+                1000,
+                bytes.fromhex(
+                    "02 09 01 00 00 00 00 00"
+                ),
+            )
+        )
+
+        response = feedback.parse_bus_event(
+            ans(1500, [])
+        )
+
+        result = feedback.build_diagnostic_transactions([
+            self._item(0, 0, request),
+            self._item(1, 0, response),
+        ])
+
+        tx = result["transactions"][0]
+
+        self.assertTrue(tx["empty_receive_batch"])
+        self.assertEqual(tx["tick_delta"], 500)
+
+    def test_flow_control_bridge_pair(self):
+        request = feedback.parse_bus_event(
+            ask(
+                100,
+                bytes.fromhex(
+                    "02 09 02 00 00 00 00 00"
+                ),
+            )
+        )
+
+        flow_control = feedback.parse_bus_event(
+            ask(
+                116,
+                bytes.fromhex(
+                    "30 00 00 00 00 00 00 00"
+                ),
+            )
+        )
+
+        response = feedback.parse_bus_event(
+            ans(
+                256,
+                [
+                    (
+                        0x7E8,
+                        bytes.fromhex(
+                            "10 14 49 02 01 31 48 47"
+                        ),
+                    ),
+                    (
+                        0x7E8,
+                        bytes.fromhex(
+                            "21 43 4d 38 32 36 33 33"
+                        ),
+                    ),
+                    (
+                        0x7E8,
+                        bytes.fromhex(
+                            "22 41 30 30 34 33 35 32"
+                        ),
+                    ),
+                ],
+            )
+        )
+
+        result = feedback.build_diagnostic_transactions([
+            self._item(0, 0, request),
+            self._item(1, 0, flow_control),
+            self._item(2, 0, response),
+        ])
+
+        self.assertEqual(
+            len(result["transactions"]),
+            1,
+        )
+
+        tx = result["transactions"][0]
+
+        self.assertEqual(
+            tx["pairing"],
+            "flow_control_bridge",
+        )
+
+        self.assertEqual(tx["tick_delta"], 156)
+
+        self.assertEqual(
+            len(tx["auxiliary"]),
+            1,
+        )
+
+        self.assertEqual(
+            tx["auxiliary"][0]["index"],
+            1,
+        )
+
+        self.assertEqual(result["orphan_answers"], [])
+        self.assertEqual(result["auxiliary_asks"], [])
+
+    def test_orphan_answer_is_preserved(self):
+        orphan = feedback.parse_bus_event(
+            ans(
+                90,
+                [
+                    (
+                        0x7E8,
+                        bytes.fromhex(
+                            "02 47 00 00 00 00 00 00"
+                        ),
+                    ),
+                ],
+            )
+        )
+
+        request = feedback.parse_bus_event(
+            ask(
+                100,
+                bytes.fromhex(
+                    "02 01 0c 00 00 00 00 00"
+                ),
+            )
+        )
+
+        response = feedback.parse_bus_event(
+            ans(
+                104,
+                [
+                    (
+                        0x7E8,
+                        bytes.fromhex(
+                            "04 41 0c 00 00 aa aa aa"
+                        ),
+                    ),
+                ],
+            )
+        )
+
+        result = feedback.build_diagnostic_transactions([
+            self._item(0, 0, orphan),
+            self._item(1, 0, request),
+            self._item(2, 0, response),
+        ])
+
+        self.assertEqual(
+            len(result["transactions"]),
+            1,
+        )
+
+        self.assertEqual(
+            len(result["orphan_answers"]),
+            1,
+        )
+
+        self.assertEqual(
+            result["orphan_answers"][0]["index"],
+            0,
+        )
+
+    def test_does_not_pair_across_epoch(self):
+        request = feedback.parse_bus_event(
+            ask(
+                65000,
+                bytes.fromhex(
+                    "02 01 0c 00 00 00 00 00"
+                ),
+            )
+        )
+
+        response = feedback.parse_bus_event(
+            ans(
+                100,
+                [
+                    (
+                        0x7E8,
+                        bytes.fromhex(
+                            "04 41 0c 00 00 aa aa aa"
+                        ),
+                    ),
+                ],
+            )
+        )
+
+        result = feedback.build_diagnostic_transactions([
+            self._item(0, 0, request),
+            self._item(1, 1, response),
+        ])
+
+        self.assertEqual(
+            result["transactions"],
+            [],
+        )
+
+        self.assertEqual(
+            len(result["orphan_answers"]),
+            1,
+        )
+
+
 if __name__ == "__main__":
     unittest.main()
