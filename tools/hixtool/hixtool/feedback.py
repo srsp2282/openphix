@@ -359,6 +359,173 @@ def describe(payload):
     return payload.hex(" ")
 
 
+def parse_isotp_frame(data):
+    """Parse the ISO-TP PCI information from one CAN data field.
+
+    This handles the classic-CAN forms observed in AD410 captures:
+    Single Frame, First Frame, Consecutive Frame, and Flow Control.
+
+    Padding bytes are retained where useful but are not interpreted.
+    """
+    data = bytes(data)
+
+    if not data:
+        raise ValueError("empty CAN data field")
+
+    frame_type = data[0] >> 4
+
+    if frame_type == 0:
+        length = data[0] & 0x0f
+
+        if length > len(data) - 1:
+            raise ValueError(
+                "ISO-TP Single Frame length exceeds CAN data"
+            )
+
+        return {
+            "type": "single",
+            "declared_length": length,
+            "payload": data[1:1 + length],
+            "padding": data[1 + length:],
+            "raw": data,
+        }
+
+    if frame_type == 1:
+        if len(data) < 2:
+            raise ValueError("truncated ISO-TP First Frame")
+
+        length = (
+            ((data[0] & 0x0f) << 8)
+            | data[1]
+        )
+
+        return {
+            "type": "first",
+            "declared_length": length,
+            "payload": data[2:],
+            "raw": data,
+        }
+
+    if frame_type == 2:
+        return {
+            "type": "consecutive",
+            "sequence": data[0] & 0x0f,
+            "payload": data[1:],
+            "raw": data,
+        }
+
+    if frame_type == 3:
+        if len(data) < 3:
+            raise ValueError("truncated ISO-TP Flow Control frame")
+
+        return {
+            "type": "flow_control",
+            "flow_status": data[0] & 0x0f,
+            "block_size": data[1],
+            "st_min": data[2],
+            "padding": data[3:],
+            "raw": data,
+        }
+
+    raise ValueError(
+        "unsupported ISO-TP PCI type 0x%x" % frame_type
+    )
+
+
+def reassemble_isotp_frames(frames):
+    """Reassemble one ordered ISO-TP message from CAN frame dictionaries.
+
+    `frames` uses the dictionaries produced by parse_bus_event() for Ans
+    frames.  All frames in one message must have the same CAN ID.
+
+    The result records completeness instead of assuming that every capture
+    contains all Consecutive Frames.
+
+    This function only reassembles frames already known to belong to one
+    direction/message.  It does not infer wire chronology between stored
+    Ask:/Ans: events.
+    """
+    if not frames:
+        raise ValueError("cannot reassemble an empty frame sequence")
+
+    first_can_id = frames[0].get("can_id")
+    first = parse_isotp_frame(frames[0]["data"])
+
+    if first["type"] == "single":
+        return {
+            "can_id": first_can_id,
+            "declared_length": first["declared_length"],
+            "payload": first["payload"],
+            "complete": True,
+            "frames_used": 1,
+            "errors": [],
+        }
+
+    if first["type"] != "first":
+        raise ValueError(
+            "ISO-TP message must begin with Single or First Frame"
+        )
+
+    declared_length = first["declared_length"]
+    payload = bytearray(first["payload"])
+    frames_used = 1
+    expected_sequence = 1
+    errors = []
+
+    for frame in frames[1:]:
+        if len(payload) >= declared_length:
+            break
+
+        can_id = frame.get("can_id")
+
+        if (
+            first_can_id is not None
+            and can_id is not None
+            and can_id != first_can_id
+        ):
+            errors.append(
+                "CAN ID changed from 0x%x to 0x%x"
+                % (first_can_id, can_id)
+            )
+            break
+
+        parsed = parse_isotp_frame(frame["data"])
+
+        if parsed["type"] != "consecutive":
+            errors.append(
+                "expected Consecutive Frame, got %s"
+                % parsed["type"]
+            )
+            break
+
+        if parsed["sequence"] != expected_sequence:
+            errors.append(
+                "expected sequence 0x%x, got 0x%x"
+                % (
+                    expected_sequence,
+                    parsed["sequence"],
+                )
+            )
+            break
+
+        payload.extend(parsed["payload"])
+        frames_used += 1
+        expected_sequence = (
+            expected_sequence + 1
+        ) & 0x0f
+
+    complete = len(payload) >= declared_length
+
+    return {
+        "can_id": first_can_id,
+        "declared_length": declared_length,
+        "payload": bytes(payload[:declared_length]),
+        "complete": complete,
+        "frames_used": frames_used,
+        "errors": errors,
+    }
+
+
 def describe_ad410_event(event):
     """Readable one-line form of a parsed AD410 logical event."""
     kind = event["type"]

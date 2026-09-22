@@ -432,5 +432,139 @@ class FeedbackDescriptionTests(unittest.TestCase):
         )
 
 
+class FeedbackIsoTpTests(unittest.TestCase):
+
+    def test_single_frame(self):
+        parsed = feedback.parse_isotp_frame(
+            bytes.fromhex(
+                "04 41 0c 00 00 aa aa aa"
+            )
+        )
+
+        self.assertEqual(parsed["type"], "single")
+        self.assertEqual(parsed["declared_length"], 4)
+        self.assertEqual(
+            parsed["payload"],
+            bytes.fromhex("41 0c 00 00"),
+        )
+        self.assertEqual(
+            parsed["padding"],
+            bytes.fromhex("aa aa aa"),
+        )
+
+    def test_flow_control(self):
+        parsed = feedback.parse_isotp_frame(
+            bytes.fromhex(
+                "30 00 00 00 00 00 00 00"
+            )
+        )
+
+        self.assertEqual(
+            parsed["type"],
+            "flow_control",
+        )
+        self.assertEqual(parsed["flow_status"], 0)
+        self.assertEqual(parsed["block_size"], 0)
+        self.assertEqual(parsed["st_min"], 0)
+
+    def test_synthetic_vin_reassembly(self):
+        # Synthetic Mode 09 PID 02 response:
+        #
+        #   49 02 01 + VIN "1HGCM82633A004352"
+        #
+        # This is intentionally not taken from the user's vehicle.
+        frames = [
+            {
+                "can_id": 0x7E8,
+                "data": bytes.fromhex(
+                    "10 14 49 02 01 31 48 47"
+                ),
+            },
+            {
+                "can_id": 0x7E8,
+                "data": bytes.fromhex(
+                    "21 43 4d 38 32 36 33 33"
+                ),
+            },
+            {
+                "can_id": 0x7E8,
+                "data": bytes.fromhex(
+                    "22 41 30 30 34 33 35 32"
+                ),
+            },
+        ]
+
+        result = feedback.reassemble_isotp_frames(
+            frames
+        )
+
+        expected = (
+            bytes.fromhex("49 02 01")
+            + b"1HGCM82633A004352"
+        )
+
+        self.assertEqual(result["can_id"], 0x7E8)
+        self.assertEqual(
+            result["declared_length"],
+            20,
+        )
+        self.assertTrue(result["complete"])
+        self.assertEqual(result["frames_used"], 3)
+        self.assertEqual(result["errors"], [])
+        self.assertEqual(
+            result["payload"],
+            expected,
+        )
+
+    def test_incomplete_first_frame(self):
+        frames = [
+            {
+                "can_id": 0x7E8,
+                "data": bytes.fromhex(
+                    "10 14 49 02 01 31 48 47"
+                ),
+            },
+        ]
+
+        result = feedback.reassemble_isotp_frames(
+            frames
+        )
+
+        self.assertFalse(result["complete"])
+        self.assertEqual(
+            result["declared_length"],
+            20,
+        )
+        self.assertEqual(result["frames_used"], 1)
+
+    def test_bad_consecutive_sequence(self):
+        frames = [
+            {
+                "can_id": 0x7E8,
+                "data": bytes.fromhex(
+                    "10 14 49 02 01 31 48 47"
+                ),
+            },
+            {
+                "can_id": 0x7E8,
+                "data": bytes.fromhex(
+                    "22 43 4d 38 32 36 33 33"
+                ),
+            },
+        ]
+
+        result = feedback.reassemble_isotp_frames(
+            frames
+        )
+
+        self.assertFalse(result["complete"])
+        self.assertEqual(result["frames_used"], 1)
+        self.assertEqual(len(result["errors"]), 1)
+        self.assertIn(
+            "expected sequence",
+            result["errors"][0],
+        )
+
+
 if __name__ == "__main__":
     unittest.main()
