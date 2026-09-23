@@ -37,6 +37,12 @@ table and parses its `Ask:` / `Ans:` bus events and CAN receive batches.
 The AD410 profile is capture-validated rather than auto-detected; do not
 assume it applies to other models without testing.
 
+On the tested AD410, `Feedback.bin` is a support/debug trace containing UI
+breadcrumbs and diagnostic traffic rather than a persistent Data Stream
+time-series recording. Real PID values can appear in the trace, but a
+controlled full-flash comparison found no separate stored live-data series
+in the device's 16 MiB external flash.
+
 The package can also be used as a library:
 
 ```python

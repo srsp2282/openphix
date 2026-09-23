@@ -768,13 +768,28 @@ The open firmware reads records, protocol records, connect and keep alive
 steps, version information, UDS fault code entries, datastream channels
 and the item lists in `firmware/core/funcfg.c`.
 
-## 16. The feedback bus log (outside the data image)
+## 16. The Feedback support/debug trace (outside the data image)
 
 The 128 KiB "Feedback" area at flash end minus 0x50000 is saved by
 `openphix-tool feedback` as `Feedback.bin`. The area begins with a 13-byte
 header whose first eight bytes are `AUTOPHIX`. The older Biltema capture has
 five zero bytes after the name. The tested AD410 capture has `00 02 00 00 00`
 there; the meaning of the final four-byte value is not known.
+
+On the tested AD410, Feedback is best understood as a vendor support/debug
+trace rather than a saved live-data recording. It contains scanner UI/session
+breadcrumbs (`Str:`) together with diagnostic transmit/receive events
+(`Ask:` / `Ans:`).
+
+A controlled before/after experiment captured a selected OBD-II Data Stream
+screen while comparing the complete 16 MiB external flash. Only the Feedback
+area changed. The new Feedback tail contained the initial supported-PID and
+data-value sweep, but not a persistent continuously sampled time series, and
+no separate live-data store was observed elsewhere in external flash.
+
+The scanner's DTC Review storage is separate from Feedback. On the tested
+AD410 it consists of plaintext DTC-history records containing VIN, DTC code
+and description data.
 
 Stored records follow the 13-byte header and continue until the next record
 would begin with the erased word `FF FF FF FF`:
@@ -944,7 +959,7 @@ size of `12 + text_length`.
 Frames. `hixtool` can parse and reassemble an ordered ISO-TP frame sequence
 when the frames needed for a message are present.
 
-The Feedback log is not a timestamped wire capture.
+The Feedback support trace is not a timestamped wire capture or a persistent live-data time series.
 
 One observed Mode 09 PID 02 transaction is stored logically as:
 
@@ -1002,6 +1017,10 @@ Still unknown or intentionally not inferred:
 - whether logical events can span stored records
 - unobserved `Ask:`/`Ans:` variants
 - whether the AD410 table applies to other devices or firmware families
+
+Feedback can contain real PID requests and ECU values generated during a
+diagnostic session, but the tested captures do not establish it as a
+continuous vehicle-performance logger.
 
 `hixtool feedback Feedback.bin --profile ad410` selects the AD410 decoder.
 The default remains the older `legacy` profile.

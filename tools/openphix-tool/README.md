@@ -16,7 +16,7 @@ Commands:
 - `update <dir> [-y] [--mcu-only] [--data-only] [--skip-erase] [--force-erase]`:
   flash a package with the vendor's sequence, including the Erase.bin step
   for DM300 units with an old bootloader.
-- `feedback [-o Feedback.bin]`: download the 128 KiB recorded bus log.
+- `feedback [-o Feedback.bin]`: download the 128 KiB Feedback support/debug trace.
 - `dtc-review [-o file]`: dump stored DTC sessions (vendor "Review & Print").
 - `read-flash -o file [-a addr] [-l len] [--decrypt]`: dump external flash,
   optionally removing the data image obfuscation as it is read.

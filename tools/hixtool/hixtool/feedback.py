@@ -1,4 +1,5 @@
-"""The "Feedback" bus log (the 128 KiB area at flash end - 0x50000, saved by
+"""The "Feedback" support/debug trace (the 128 KiB area at flash end - 0x50000,
+saved by
 `openphix-tool feedback` as Feedback.bin).
 
     0x00  13-byte header beginning with "AUTOPHIX"
@@ -863,7 +864,7 @@ def cmd_feedback(a):
 def register(sub):
     s = sub.add_parser(
         "feedback",
-        help="decode a Feedback.bin bus log",
+        help="decode a Feedback.bin support/debug trace",
     )
 
     s.add_argument("file")

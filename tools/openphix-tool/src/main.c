@@ -81,7 +81,7 @@ static void usage(FILE *f)
           "  info                         hardware revision, bootloader version, flash size\n"
           "  package <dir> [--notes]      describe an unzipped update package\n"
           "  update <dir> [-y] [--mcu-only] [--data-only] [--skip-erase] [--force-erase]\n"
-          "  feedback [-o Feedback.bin]   download the recorded bus log\n"
+          "  feedback [-o Feedback.bin]   download the Feedback support trace\n"
           "  dtc-review [-o file]         dump stored DTC sessions (vendor 'Review & Print')\n"
           "  read-flash -o file [-a addr] [-l len] [--decrypt]\n"
           "  decrypt <in> <out> [-a addr] deobfuscate an ExtFlashDat.bin or flash dump\n"

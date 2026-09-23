@@ -164,7 +164,7 @@ described in [data-image-format.md](data-image-format.md).
 
 | Offset from end | Size | Content |
 |---|---|---|
-| -0x50000 | 0x20000 (32 blocks) | "Feedback" bus log. Empty when the first four bytes are 0xFF. Saved as `Feedback.bin` |
+| -0x50000 | 0x20000 (32 blocks) | "Feedback" support/debug trace. Empty when the first four bytes are 0xFF. Saved as `Feedback.bin` |
 | -0x30000 | 0x1E000 (30 blocks) | DTC review records, one per 4 KiB block |
 
 Flash size comes from 0x0B, or, when unsupported, by attempting a 0x06 read
@@ -212,7 +212,7 @@ updates from its seller at all. It is ordinary DM100 hardware underneath.
   |---|---|
   | 0x0000000 .. 0x13E4F99 | data image (`ExtFlashDat.bin` content, about 20.8 MB) |
   | 0x13E4F9A .. 0x1FAFFFF | erased (0xFF) |
-  | 0x1FB0000 .. 0x1FCB127 | feedback log: `AUTOPHIX` header, then back-to-back length-prefixed stored records (LE32 total length; mostly 26 bytes on this unit), followed by erased 0xFF; `Feedback.bin` is exactly this 128 KiB area |
+  | 0x1FB0000 .. 0x1FCB127 | Feedback support/debug trace: `AUTOPHIX` header, then back-to-back length-prefixed stored records (LE32 total length; mostly 26 bytes on this unit), followed by erased 0xFF; `Feedback.bin` is exactly this 128 KiB area |
   | 0x1FD0000 .. 0x1FEDFFF | DTC review area, erased on this unit |
   | 0x1FF0000 | settings block, `03 00 01 00 01 00` then 0xFF (probably language index, beeper, startup instructions) |
 
@@ -220,7 +220,10 @@ updates from its seller at all. It is ordinary DM100 hardware underneath.
   settings observed so far are plain. Feedback stored-record payloads are
   position encoded: the older format uses the image cipher, while the tested
   AD410 uses the same rotation schedule with a different fixed 256-byte XOR
-  table. See section 16 of `data-image-format.md`. The data image itself is
+  table. On the tested AD410 this area behaves as a support/debug trace, not
+  as persistent Data Stream time-series storage. A controlled full-flash
+  before/after comparison found no separate live-data store elsewhere in the
+  16 MiB external flash. See section 16 of `data-image-format.md`. The data image itself is
   stored exactly as in the package file, so it is the application, not the
   bootloader, that removes the image cipher when it reads a resource.
 
